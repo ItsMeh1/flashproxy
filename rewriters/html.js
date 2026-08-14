@@ -1,7 +1,7 @@
 export function rewriteHtml(html, pageUrl, proxyPrefix) {
     const base = new URL(pageUrl);
     
-    // Rewrite absolute URLs in attributes
+    // Rewrite absolute URLs
     html = html.replace(
         /(\s(?:href|src|action|poster|data-src|data-href|data-url|content)=["'])(https?:\/\/[^"']+)(["'])/gi,
         (m, pre, url, suf) => `${pre}${proxyPrefix}/${url}${suf}`
@@ -29,13 +29,11 @@ export function rewriteHtml(html, pageUrl, proxyPrefix) {
         (m, pre, path, suf) => `${pre}${proxyPrefix}/${base.origin}${path}${suf}`
     );
     
-    // Remove manifest links (PWA conflicts)
+    // Remove manifest links and CSP meta tags
     html = html.replace(/<link[^>]*rel=["']manifest["'][^>]*>/gi, '');
-    
-    // Remove CSP meta tags
     html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
     
-    // Inject proxy bootstrap
+    // Inject proxy runtime
     const injection = `<script data-flashproxy>
 (function(){
     const __pp='${proxyPrefix}';
@@ -83,6 +81,15 @@ export function rewriteHtml(html, pageUrl, proxyPrefix) {
             else if(url.startsWith('/'))url=__pp+'/'+__origin+url;
         }
         return new _e(url,o);
+    };
+    
+    const _Worker=window.Worker;
+    window.Worker=function(url,o){
+        if(typeof url==='string'){
+            if(url.startsWith('http'))url=__pp+'/'+url;
+            else if(url.startsWith('/'))url=__pp+'/'+__origin+url;
+        }
+        return new _Worker(url,o);
     };
     
     const _loc=new URL(__page);
