@@ -1,4 +1,6 @@
-<div align="center"> <img src="logo.png" alt="Logo" width="700" style="border-radius: 16px;"> </div>
+<p align="center">
+  <img src="logo.png" alt="Logo" width="400">
+</p>
 
 # FlashProxy
 
