@@ -3,42 +3,38 @@
 const iframe = document.getElementById('browser-frame');
 const addressBar = document.getElementById('address-bar');
 
+const iframe = document.getElementById('browser-frame');
+const addressBar = document.getElementById('address-bar');
+
 // Register Service Worker
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js')
-        .then(reg => console.log('SW registered:', reg.scope))
-        .catch(err => console.error('SW failed:', err));
+        .then(() => console.log('SW registered'))
+        .catch(err => console.error('SW error:', err));
 }
 
-// When user hits "Go"
-document.getElementById('go').addEventListener('click', () => {
-    const url = addressBar.value.trim();
-    if (!url.startsWith('http')) {
-        addressBar.value = 'https://' + url;
+// Listen for navigation from iframe
+window.addEventListener('message', (e) => {
+    if (e.data && e.data.__fp_nav) {
+        addressBar.value = e.data.__fp_nav;
+        navigateTo(e.data.__fp_nav);
     }
-    navigateTo(addressBar.value);
 });
 
-addressBar.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('go').click();
-});
-
-function navigateTo(url) { // main navigation function for simplicity
-    // Load the site THROUGH the proxy
-    // The Service Worker will intercept and rewrite everything
+function navigateTo(url) {
+    if (!url.startsWith('http')) url = 'https://' + url;
+    addressBar.value = url;
     iframe.src = '/proxy/' + url;
 }
 
-// Back/Forward buttons
-document.getElementById('back').addEventListener('click', () => {
-    iframe.contentWindow.history.back();
-});
-document.getElementById('forward').addEventListener('click', () => {
-    iframe.contentWindow.history.forward();
-});
-document.getElementById('reload').addEventListener('click', () => {
-    iframe.contentWindow.location.reload();
-});
+document.getElementById('go').addEventListener('click', () => navigateTo(addressBar.value));
+addressBar.addEventListener('keydown', (e) => { if (e.key === 'Enter') navigateTo(addressBar.value); });
+
+document.getElementById('back').addEventListener('click', () => iframe.contentWindow.history.back());
+document.getElementById('forward').addEventListener('click', () => iframe.contentWindow.history.forward());
+document.getElementById('reload').addEventListener('click', () => iframe.contentWindow.location.reload());
+
+navigateTo('https://example.com');
 
 // Initial load
 navigateTo('https://example.com');
