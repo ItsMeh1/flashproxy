@@ -1,8 +1,12 @@
+<!--
+This is a demo for your FlashProxy app's main page. Edit & serve all your files from the public folder.
+-->
+
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>FlashProxy</title>
+    <title>FlashProxy Demo</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +19,7 @@
             <button id="go">Go</button>
         </div>
     </div>
-    <iframe id="browser-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>
-    <script src="main.js"></script>
+    <div id="browser-container"></div>
+    <script type="module" src="main.js"></script>
 </body>
 </html>
