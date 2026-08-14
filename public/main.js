@@ -10,10 +10,7 @@ const FlashProxy = {
         input = input.trim();
         if (!input) return 'https://example.com';
         
-        // Has protocol already
         if (/^https?:\/\//i.test(input)) return input;
-        
-        // Protocol-relative
         if (input.startsWith('//')) return 'https:' + input;
         
         // Domain, IP, or localhost
