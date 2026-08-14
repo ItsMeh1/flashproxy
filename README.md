@@ -1,10 +1,21 @@
-<p align="center">
-  <img src="logo.png" alt="Logo" width="400">
-</p>
+<h1 align="center">Flash Proxy</h1>
+<div align="center">
+  <img src="logo.png" height="200" />
+</div>
 
-# FlashProxy
+<div align="center">
+  <img src="https://img.shields.io/github/issues/ItsMeh1/flashproxy?style=flat&color=orange" />
+  <img src="https://img.shields.io/github/stars/ItsMeh1/flashproxy?style=flat&color=orange" />
+</div>
 
-A Scramjet-like web interception proxy built from scratch.
+<div align="center">
+  [📦 Getting Started] (https://example.com)
+</div>
+
+#
+
+
+Flash Proxy is an experimental web interception proxy. Flash proxy lets you bypass network and CORS restrictions on loading of sites. This is done through lots of interception, rewriting, and sandboxing.
 
 ## Run
 
