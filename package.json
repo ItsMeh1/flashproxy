@@ -1,21 +1,22 @@
 {
   "name": "flashproxy",
   "version": "1.1.0",
-  "description": "Advanced web inteception proxy to evade internet censorship",
+  "description": "Advanced web interception proxy to evade internet censorship",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
-    "test": "node rewriters/js-ast.js"
+    "dev": "node --watch server.js"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "@mercuryworkshop/bare-mux": "^2.1.9",
+    "@mercuryworkshop/epoxy-transport": "^3.0.1",
+    "@mercuryworkshop/wisp-js": "^0.4.0"
   },
   "devDependencies": {
-    "@babel/generator": "^7.24.0",
-    "@babel/parser": "^7.24.0",
-    "@babel/traverse": "^7.24.0",
-    "@babel/types": "^7.24.0"
+    "oxc-parser": "^0.29.0",
+    "oxc-walker": "^0.0.4"
   },
   "engines": {
     "node": ">=18.0.0"
