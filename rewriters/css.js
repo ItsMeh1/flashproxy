@@ -15,8 +15,7 @@ export function rewriteCss(css, pageUrl, proxyPrefix) {
     
     // @import
     css = css.replace(/@import\s+(?:url\()?["']?([^"')]+)["']?\)?/gi, (match, url) => {
-        if (!url) return match;
-        if (url.startsWith('data:')) return match;
+        if (!url || url.startsWith('data:')) return match;
         if (url.startsWith('http')) return `@import "${proxyPrefix}/${url}"`;
         if (url.startsWith('//')) return `@import "${proxyPrefix}/https:${url}"`;
         try {
