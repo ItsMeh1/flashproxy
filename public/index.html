@@ -2,24 +2,20 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>My Proxy Browser</title>
+    <title>FlashProxy</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- Browser Chrome -->
     <div id="chrome">
         <div id="nav-bar">
             <button id="back">←</button>
             <button id="forward">→</button>
             <button id="reload">↻</button>
-            <input id="address-bar" type="text" placeholder="Enter URL..." value="https://example.com">
+            <input id="address-bar" type="text" placeholder="Enter URL or search..." value="example.com">
             <button id="go">Go</button>
         </div>
     </div>
-    
-    <!-- The "browser" — an iframe where proxied sites load -->
-    <iframe id="browser-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
-
+    <iframe id="browser-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>
     <script src="main.js"></script>
 </body>
 </html>
