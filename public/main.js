@@ -1,19 +1,58 @@
-// This runs in your browser chrome (not inside the proxied page)
-
 const iframe = document.getElementById('browser-frame');
 const addressBar = document.getElementById('address-bar');
 
-const iframe = document.getElementById('browser-frame');
-const addressBar = document.getElementById('address-bar');
+// =====================
+// FlashProxy API
+// =====================
 
-// Register Service Worker
+const FlashProxy = {
+    resolve(input) {
+        input = input.trim();
+        if (!input) return 'https://example.com';
+        
+        // Has protocol already
+        if (/^https?:\/\//i.test(input)) return input;
+        
+        // Protocol-relative
+        if (input.startsWith('//')) return 'https:' + input;
+        
+        // Domain, IP, or localhost
+        if (/^([a-z0-9][a-z0-9\-]*\.)+[a-z]{2,}/i.test(input) && !input.includes(' ')) return 'https://' + input;
+        if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(input) && !input.includes(' ')) return 'https://' + input;
+        if (/^localhost(:\d+)?/i.test(input) && !input.includes(' ')) return 'https://' + input;
+        
+        // Search query
+        return 'https://www.google.com/search?q=' + encodeURIComponent(input);
+    },
+
+    go(input) {
+        const url = this.resolve(input);
+        navigateTo(url);
+        return url;
+    },
+
+    goRaw(url) {
+        navigateTo(url);
+        return url;
+    }
+};
+
+window.fp = FlashProxy;
+
+// =====================
+// Service Worker
+// =====================
+
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js')
         .then(() => console.log('SW registered'))
         .catch(err => console.error('SW error:', err));
 }
 
-// Listen for navigation from iframe
+// =====================
+// Navigation
+// =====================
+
 window.addEventListener('message', (e) => {
     if (e.data && e.data.__fp_nav) {
         addressBar.value = e.data.__fp_nav;
@@ -22,19 +61,34 @@ window.addEventListener('message', (e) => {
 });
 
 function navigateTo(url) {
-    if (!url.startsWith('http')) url = 'https://' + url;
     addressBar.value = url;
     iframe.src = '/proxy/' + url;
 }
 
-document.getElementById('go').addEventListener('click', () => navigateTo(addressBar.value));
-addressBar.addEventListener('keydown', (e) => { if (e.key === 'Enter') navigateTo(addressBar.value); });
+// =====================
+// Event Listeners
+// =====================
 
-document.getElementById('back').addEventListener('click', () => iframe.contentWindow.history.back());
-document.getElementById('forward').addEventListener('click', () => iframe.contentWindow.history.forward());
-document.getElementById('reload').addEventListener('click', () => iframe.contentWindow.location.reload());
+document.getElementById('go').addEventListener('click', () => fp.go(addressBar.value));
 
-navigateTo('https://example.com');
+addressBar.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') fp.go(addressBar.value);
+});
 
-// Initial load
-navigateTo('https://example.com');
+document.getElementById('back').addEventListener('click', () => {
+    try { iframe.contentWindow.history.back(); } catch {}
+});
+
+document.getElementById('forward').addEventListener('click', () => {
+    try { iframe.contentWindow.history.forward(); } catch {}
+});
+
+document.getElementById('reload').addEventListener('click', () => {
+    try { iframe.contentWindow.location.reload(); } catch {}
+});
+
+// =====================
+// Initial Load
+// =====================
+
+fp.go('example.com');
