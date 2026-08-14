@@ -13,38 +13,49 @@ const server = createServer(app);
 const PORT = 3000;
 const PROXY_PREFIX = '/proxy';
 
+// Parse raw body for all requests so we can forward POST/PUT/PATCH
+app.use(express.raw({ type: () => true, limit: '50mb' }));
+
 // =====================
 // COOKIE JAR
 // =====================
-const cookieJar = new Map(); // domain -> [cookies]
+const cookieJar = new Map();
 
-function getCookiesForDomain(domain) {
+function parseCookieDomain(header) {
+    const match = header.match(/domain=([^;]+)/i);
+    return match ? match[1].trim().toLowerCase() : null;
+}
+
+function getCookiesForDomain(hostname) {
     const cookies = [];
     for (const [jarDomain, jarCookies] of cookieJar.entries()) {
-        if (domain === jarDomain || domain.endsWith('.' + jarDomain) || jarDomain.endsWith('.' + domain)) {
+        if (hostname === jarDomain || hostname.endsWith('.' + jarDomain) || jarDomain.endsWith('.' + hostname)) {
             cookies.push(...jarCookies);
         }
     }
     return cookies.map(c => `${c.name}=${c.value}`).join('; ');
 }
 
-function storeCookies(setCookieHeaders, domain) {
+function storeCookies(setCookieHeaders, fallbackDomain) {
     if (!setCookieHeaders) return;
     const headers = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
     
-    if (!cookieJar.has(domain)) cookieJar.set(domain, []);
-    const jar = cookieJar.get(domain);
-    
     for (const header of headers) {
         const [nameValue] = header.split(';');
-        const [name, value] = nameValue.trim().split('=');
-        if (!name || value === undefined) continue;
+        const eqIdx = nameValue.indexOf('=');
+        if (eqIdx === -1) continue;
         
-        // Remove old cookie with same name
-        const idx = jar.findIndex(c => c.name === name.trim());
+        const name = nameValue.slice(0, eqIdx).trim();
+        const value = nameValue.slice(eqIdx + 1).trim();
+        const domain = parseCookieDomain(header) || fallbackDomain;
+        
+        if (!cookieJar.has(domain)) cookieJar.set(domain, []);
+        const jar = cookieJar.get(domain);
+        
+        const idx = jar.findIndex(c => c.name === name);
         if (idx !== -1) jar.splice(idx, 1);
         
-        jar.push({ name: name.trim(), value: value.trim(), raw: header });
+        jar.push({ name, value, raw: header });
     }
 }
 
@@ -62,14 +73,13 @@ server.on('upgrade', (req, socket, head) => {
 // =====================
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Serve SW at root scope (required for registration)
 app.get('/sw.js', (req, res) => {
     res.setHeader('Content-Type', 'application/javascript');
     res.sendFile(path.join(__dirname, 'src', 'sw.js'));
 });
 
 // =====================
-// PROXY ENDPOINT (ALL METHODS)
+// PROXY ENDPOINT
 // =====================
 app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
     const targetUrl = req.params[0] + (req.url.includes('?') ? '?' + req.url.split('?')[1] : '');
@@ -78,7 +88,7 @@ app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
     console.log(`[PROXY ${req.method}]`, targetUrl);
     
     try {
-        // Build headers
+        // Forward headers
         const headers = {};
         for (const [key, val] of Object.entries(req.headers)) {
             if (['host', 'connection', 'content-length'].includes(key.toLowerCase())) continue;
@@ -89,9 +99,9 @@ app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
         const jarCookies = getCookiesForDomain(target.hostname);
         if (jarCookies) headers['Cookie'] = jarCookies;
         
-        // Forward body for POST/PUT/PATCH
+        // Forward body
         let body = undefined;
-        if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
+        if (!['GET', 'HEAD'].includes(req.method) && req.body && req.body.length > 0) {
             body = req.body;
         }
         
@@ -99,12 +109,18 @@ app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
             method: req.method,
             headers,
             body,
-            redirect: 'manual', // Handle redirects ourselves
+            redirect: 'manual',
         });
 
-        // Store cookies from response
-        const setCookie = response.headers.getSetCookie?.() || response.headers.get('set-cookie');
-        if (setCookie) storeCookies(setCookie, target.hostname);
+        // Store cookies
+        let setCookie = [];
+        if (typeof response.headers.getSetCookie === 'function') {
+            setCookie = response.headers.getSetCookie();
+        } else {
+            const sc = response.headers.get('set-cookie');
+            if (sc) setCookie = [sc];
+        }
+        if (setCookie.length) storeCookies(setCookie, target.hostname);
 
         // Handle redirects
         if ([301, 302, 303, 307, 308].includes(response.status)) {
