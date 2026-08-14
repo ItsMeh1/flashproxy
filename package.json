@@ -10,11 +10,21 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "@mercuryworkshop/wisp-js": "^0.4.0"
+    "@mercuryworkshop/bare-mux": "^2.1.9",
+    "@mercuryworkshop/epoxy-transport": "^2.1.28",
+    "@mercuryworkshop/libcurl-transport": "^1.5.0",
+    "@mercuryworkshop/wisp-js": "^0.3.3",
+    "@nebula-services/bare-server-node": "^2.0.4",
+    "dom-serializer": "^2.0.0",
+    "domhandler": "^5.0.3",
+    "domutils": "^3.2.2",
+    "htmlparser2": "10.0.0",
+    "idb": "^8.0.3",
+    "parse-domain": "^8.2.2",
+    "set-cookie-parser": "^2.7.1"
   },
   "devDependencies": {
-    "oxc-parser": "^0.29.0",
-    "oxc-walker": "^0.0.4"
+    "oxc-parser": "^0.29.0"
   },
   "engines": {
     "node": ">=18.0.0"
