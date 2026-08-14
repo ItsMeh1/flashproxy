@@ -1,6 +1,9 @@
 import express from 'express';
 import { createServer } from 'http';
 import { server as wisp } from '@mercuryworkshop/wisp-js/server';
+import createBareServer from '@nebula-services/bare-server-node';
+import { parse, splitCookiesString } from 'set-cookie-parser';
+import { parseDomain } from 'parse-domain';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { rewriteHtml } from './rewriters/html.js';
@@ -13,57 +16,70 @@ const server = createServer(app);
 const PORT = 3000;
 const PROXY_PREFIX = '/proxy';
 
-// Parse raw body for all requests so we can forward POST/PUT/PATCH
+// =====================
+// BODY PARSING (raw for all content types)
+// =====================
 app.use(express.raw({ type: () => true, limit: '50mb' }));
 
 // =====================
-// COOKIE JAR
+// COOKIE JAR (per-domain, using set-cookie-parser)
 // =====================
 const cookieJar = new Map();
 
-function parseCookieDomain(header) {
-    const match = header.match(/domain=([^;]+)/i);
-    return match ? match[1].trim().toLowerCase() : null;
+function normalizeDomain(hostname) {
+    try {
+        const parsed = parseDomain(hostname);
+        if (parsed && parsed.domain) {
+            return [parsed.domain, ...parsed.topLevelDomains].join('.');
+        }
+    } catch {}
+    return hostname.toLowerCase();
 }
 
-function getCookiesForDomain(hostname) {
-    const cookies = [];
-    for (const [jarDomain, jarCookies] of cookieJar.entries()) {
+function getCookiesForUrl(url) {
+    const hostname = normalizeDomain(new URL(url).hostname);
+    const out = [];
+    for (const [jarDomain, cookies] of cookieJar.entries()) {
         if (hostname === jarDomain || hostname.endsWith('.' + jarDomain) || jarDomain.endsWith('.' + hostname)) {
-            cookies.push(...jarCookies);
+            out.push(...cookies);
         }
     }
-    return cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    return out.map(c => `${c.name}=${c.value}`).join('; ');
 }
 
-function storeCookies(setCookieHeaders, fallbackDomain) {
-    if (!setCookieHeaders) return;
-    const headers = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+function storeCookies(setCookieHeader, requestUrl) {
+    if (!setCookieHeader) return;
+    const strings = Array.isArray(setCookieHeader) ? setCookieHeader : splitCookiesString(setCookieHeader);
+    const parsed = parse(strings);
     
-    for (const header of headers) {
-        const [nameValue] = header.split(';');
-        const eqIdx = nameValue.indexOf('=');
-        if (eqIdx === -1) continue;
-        
-        const name = nameValue.slice(0, eqIdx).trim();
-        const value = nameValue.slice(eqIdx + 1).trim();
-        const domain = parseCookieDomain(header) || fallbackDomain;
-        
+    for (const cookie of parsed) {
+        const domain = cookie.domain ? cookie.domain.toLowerCase() : normalizeDomain(new URL(requestUrl).hostname);
         if (!cookieJar.has(domain)) cookieJar.set(domain, []);
         const jar = cookieJar.get(domain);
-        
-        const idx = jar.findIndex(c => c.name === name);
+        const idx = jar.findIndex(c => c.name === cookie.name);
         if (idx !== -1) jar.splice(idx, 1);
-        
-        jar.push({ name, value, raw: header });
+        jar.push(cookie);
     }
 }
 
 // =====================
-// WISP SERVER
+// BARE SERVER (for bare-mux clients)
+// =====================
+let bareServer;
+try {
+    bareServer = createBareServer('/bare/');
+    console.log('[Bare] Server mounted at /bare/');
+} catch (e) {
+    console.warn('[Bare] Failed to initialize:', e.message);
+}
+
+// =====================
+// WISP SERVER (WebSocket TCP tunnel)
 // =====================
 server.on('upgrade', (req, socket, head) => {
-    if (req.url.startsWith('/wisp/')) {
+    if (bareServer && bareServer.shouldRoute(req)) {
+        bareServer.routeUpgrade(req, socket, head);
+    } else if (req.url.startsWith('/wisp/')) {
         wisp.routeRequest(req, socket, head);
     }
 });
@@ -78,8 +94,13 @@ app.get('/sw.js', (req, res) => {
     res.sendFile(path.join(__dirname, 'src', 'sw.js'));
 });
 
+app.get('/fp-api.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.sendFile(path.join(__dirname, 'src', 'api.js'));
+});
+
 // =====================
-// PROXY ENDPOINT
+// PROXY ENDPOINT (ALL METHODS)
 // =====================
 app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
     const targetUrl = req.params[0] + (req.url.includes('?') ? '?' + req.url.split('?')[1] : '');
@@ -88,18 +109,15 @@ app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
     console.log(`[PROXY ${req.method}]`, targetUrl);
     
     try {
-        // Forward headers
         const headers = {};
         for (const [key, val] of Object.entries(req.headers)) {
             if (['host', 'connection', 'content-length'].includes(key.toLowerCase())) continue;
             headers[key] = val;
         }
         
-        // Add cookies from jar
-        const jarCookies = getCookiesForDomain(target.hostname);
+        const jarCookies = getCookiesForUrl(targetUrl);
         if (jarCookies) headers['Cookie'] = jarCookies;
         
-        // Forward body
         let body = undefined;
         if (!['GET', 'HEAD'].includes(req.method) && req.body && req.body.length > 0) {
             body = req.body;
@@ -112,33 +130,23 @@ app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
             redirect: 'manual',
         });
 
-        // Store cookies
-        let setCookie = [];
-        if (typeof response.headers.getSetCookie === 'function') {
-            setCookie = response.headers.getSetCookie();
-        } else {
-            const sc = response.headers.get('set-cookie');
-            if (sc) setCookie = [sc];
-        }
-        if (setCookie.length) storeCookies(setCookie, target.hostname);
+        const setCookie = response.headers.getSetCookie?.() || response.headers.get('set-cookie');
+        if (setCookie) storeCookies(setCookie, targetUrl);
 
-        // Handle redirects
         if ([301, 302, 303, 307, 308].includes(response.status)) {
             const location = response.headers.get('location');
             if (location) {
-                let proxyLocation;
-                if (location.startsWith('http')) proxyLocation = `${PROXY_PREFIX}/${location}`;
-                else if (location.startsWith('/')) proxyLocation = `${PROXY_PREFIX}/${target.origin}${location}`;
-                else proxyLocation = `${PROXY_PREFIX}/${new URL(location, target).href}`;
-                
-                res.setHeader('Location', proxyLocation);
+                let proxyLoc;
+                if (location.startsWith('http')) proxyLoc = `${PROXY_PREFIX}/${location}`;
+                else if (location.startsWith('/')) proxyLoc = `${PROXY_PREFIX}/${target.origin}${location}`;
+                else proxyLoc = `${PROXY_PREFIX}/${new URL(location, target).href}`;
+                res.setHeader('Location', proxyLoc);
                 return res.status(response.status).send();
             }
         }
 
         const contentType = response.headers.get('content-type') || '';
         
-        // Strip security headers
         const safeHeaders = {};
         response.headers.forEach((val, key) => {
             const lower = key.toLowerCase();
@@ -147,27 +155,27 @@ app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
             }
         });
 
-        let bodyText, rewritten;
+        let rewritten;
 
         if (contentType.includes('text/html')) {
-            bodyText = await response.text();
-            rewritten = rewriteHtml(bodyText, targetUrl, PROXY_PREFIX);
+            const text = await response.text();
+            rewritten = rewriteHtml(text, targetUrl, PROXY_PREFIX);
             safeHeaders['Content-Type'] = 'text/html';
         } 
         else if (contentType.includes('text/css')) {
-            bodyText = await response.text();
-            rewritten = rewriteCss(bodyText, targetUrl, PROXY_PREFIX);
+            const text = await response.text();
+            rewritten = rewriteCss(text, targetUrl, PROXY_PREFIX);
             safeHeaders['Content-Type'] = 'text/css';
         } 
         else if (contentType.includes('javascript') || contentType.includes('ecmascript') || contentType.includes('js')) {
-            bodyText = await response.text();
-            rewritten = rewriteJs(bodyText, targetUrl, PROXY_PREFIX);
+            const text = await response.text();
+            rewritten = rewriteJs(text, targetUrl, PROXY_PREFIX);
             safeHeaders['Content-Type'] = 'application/javascript';
         } 
         else {
-            const arrayBuffer = await response.arrayBuffer();
+            const buf = await response.arrayBuffer();
             Object.entries(safeHeaders).forEach(([k, v]) => res.setHeader(k, v));
-            return res.status(response.status).send(Buffer.from(arrayBuffer));
+            return res.status(response.status).send(Buffer.from(buf));
         }
 
         Object.entries(safeHeaders).forEach(([k, v]) => res.setHeader(k, v));
@@ -179,7 +187,19 @@ app.all(`${PROXY_PREFIX}/*`, async (req, res) => {
     }
 });
 
+// =====================
+// FALLBACK TO BARE SERVER
+// =====================
+app.use((req, res) => {
+    if (bareServer && bareServer.shouldRoute(req)) {
+        bareServer.routeRequest(req, res);
+    } else {
+        res.status(404).send('Not Found');
+    }
+});
+
 server.listen(PORT, () => {
     console.log(`FlashProxy running at http://localhost:${PORT}`);
-    console.log(`Wisp server ready on ws://localhost:${PORT}/wisp/`);
+    console.log(`Bare server at http://localhost:${PORT}/bare/`);
+    console.log(`Wisp server at ws://localhost:${PORT}/wisp/`);
 });
