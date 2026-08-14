@@ -1,3 +1,5 @@
+<div align="center"> <img src="logo.png" alt="Logo" width="700" style="border-radius: 16px;"> </div>
+
 # FlashProxy
 
 A Scramjet-like web interception proxy built from scratch.
