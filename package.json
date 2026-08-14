@@ -10,13 +10,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "@mercuryworkshop/bare-mux": "^2.1.9",
-    "@mercuryworkshop/epoxy-transport": "^3.0.1",
     "@mercuryworkshop/wisp-js": "^0.4.0"
-  },
-  "devDependencies": {
-    "oxc-parser": "^0.29.0",
-    "oxc-walker": "^0.0.4"
   },
   "engines": {
     "node": ">=18.0.0"
