@@ -12,6 +12,10 @@
     "express": "^4.19.2",
     "@mercuryworkshop/wisp-js": "^0.4.0"
   },
+  "devDependencies": {
+    "oxc-parser": "^0.29.0",
+    "oxc-walker": "^0.0.4"
+  },
   "engines": {
     "node": ">=18.0.0"
   }
