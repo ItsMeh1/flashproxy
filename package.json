@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "rewriter:build": "cd rewriter && bash build.sh"
   },
   "dependencies": {
     "fastify": "^5.3.2",
@@ -20,7 +21,6 @@
     "domhandler": "^5.0.3",
     "domutils": "^3.2.2",
     "htmlparser2": "10.0.0",
-    "idb": "^8.0.3",
     "parse-domain": "^8.2.2",
     "set-cookie-parser": "^2.7.1"
   },
