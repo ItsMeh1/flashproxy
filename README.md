@@ -10,10 +10,40 @@
 
 [📦 Getting Started](./TUTORIAL.md) 
 
-#
+# Prerequisites
 
+You'll need these to run Flash Proxy.
+```bash
+# 1. Node.js 18+ (you probably have this)
+node --version
 
-Flash Proxy is an experimental web interception proxy. Flash proxy lets you bypass network and CORS restrictions on loading of sites. This is done through lots of interception, rewriting, and sandboxing.
+# 2. Rust toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# 3. WASM target for Rust
+rustup target add wasm32-unknown-unknown
+
+# 4. wasm-bindgen-cli (bridges Rust WASM to JS)
+cargo install wasm-bindgen-cli
+
+# 5. wasm-opt (Binaryen — optimizes .wasm size & speed)
+# macOS:
+brew install binaryen
+# Ubuntu/Debian:
+sudo apt install binaryen
+# Windows (via chocolatey):
+choco install binaryen
+# Or download from: https://github.com/WebAssembly/binaryen/releases
+```
+
+Verify everything:
+
+```bash
+rustc --version        # Should print 1.80+
+wasm-bindgen --version # Should print 0.2.x
+wasm-opt --version     # Should print version 120+
+```
 
 ## Run
 
