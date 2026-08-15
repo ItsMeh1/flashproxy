@@ -1,25 +1,30 @@
-<!--
-This is a demo for your FlashProxy app's main page. Edit & serve all your files from the public folder.
--->
-
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>FlashProxy Demo</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111318">
+  <meta name="description" content="Flash Proxy browser shell">
+  <title>Flash Proxy ⚡</title>
+  <link rel="icon" href="/logo.png">
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <div id="chrome">
-        <div id="nav-bar">
-            <button id="back">←</button>
-            <button id="forward">→</button>
-            <button id="reload">↻</button>
-            <input id="address-bar" type="text" placeholder="Enter URL or search..." value="example.com">
-            <button id="go">Go</button>
-        </div>
-    </div>
-    <div id="browser-container"></div>
-    <script type="module" src="main.js"></script>
+  <header class="chrome">
+    <div class="brand"><img src="/logo.png" alt="" aria-hidden="true"><span>Flash Proxy</span></div>
+    <nav class="nav-bar" aria-label="Browser controls">
+      <button id="back" type="button" title="Back" aria-label="Back">←</button>
+      <button id="forward" type="button" title="Forward" aria-label="Forward">→</button>
+      <button id="reload" type="button" title="Reload" aria-label="Reload">↻</button>
+      <form id="address-form" class="address-form">
+        <label class="sr-only" for="address-bar">Address</label>
+        <input id="address-bar" autocomplete="off" spellcheck="false" type="text" placeholder="Enter a URL or search…" value="example.com">
+        <button id="go" type="submit">Go</button>
+      </form>
+    </nav>
+  </header>
+  <main id="browser-container" aria-label="Flash Proxy browser"></main>
+  <footer class="status" id="status" role="status" aria-live="polite">Ready</footer>
+  <script type="module" src="/main.js"></script>
 </body>
 </html>
