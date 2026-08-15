@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { proxyUrl, proxyWebSocketUrl } from '../src/url.js';
+import { proxyUrl, proxyWebSocketUrl, normalizeTarget, isPassthroughUrl } from '../src/url.js';
 import { rewriteCss } from '../rewriters/css.js';
 import { rewriteHtml } from '../rewriters/html.js';
+import { rewriteJs } from '../rewriters/js/rewriter.js';
+import { buildRuntime } from '../rewriters/runtime.js';
 
 const page = 'https://example.com/dir/index.html';
 
@@ -16,9 +18,17 @@ test('proxyUrl resolves absolute, root-relative, relative, and query URLs', () =
   assert.equal(proxyUrl('/fp/https://example.com/already', page), '/fp/https://example.com/already');
 });
 
+test('URL helpers reject unsupported schemes without destroying them', () => {
+  assert.equal(normalizeTarget('javascript:alert(1)', page), null);
+  assert.equal(isPassthroughUrl('data:text/plain,hello'), true);
+  assert.equal(isPassthroughUrl('#top'), true);
+  assert.equal(isPassthroughUrl('/relative'), false);
+});
+
 test('websocket URLs resolve against the page URL', () => {
   assert.equal(proxyWebSocketUrl('/socket', page), '/wisp/ws://example.com/socket');
   assert.equal(proxyWebSocketUrl('wss://chat.example/socket', page), '/wisp/wss://chat.example/socket');
+  assert.equal(proxyWebSocketUrl('https://example.com/socket', page), 'https://example.com/socket');
 });
 
 test('CSS rewrites url() and @import without touching data URLs', () => {
@@ -37,4 +47,23 @@ test('HTML rewrites common URL attributes, srcset, ping, style and meta refresh'
   assert.match(out, /srcset="\/fp\/https:\/\/example\.com\/dir\/small\.png 1x, \/fp\/https:\/\/example\.com\/large\.png 2x"/);
   assert.match(out, /data-flashproxy-runtime/);
   assert.match(out, /\/fp\/https:\/\/example\.com\/dir\/bg\.png/);
+  assert.doesNotMatch(out, /integrity=/i);
+});
+
+test('JavaScript fallback/API leaves data URLs and rewrites network-looking literals', async () => {
+  const out = await rewriteJs('fetch("/api/data"); const x="https://cdn.example/a.js"; const y="data:text/plain,ok";', page);
+  assert.match(out, /\/fp\/https:\/\/example\.com\/api\/data/);
+  assert.match(out, /\/fp\/https:\/\/cdn\.example\/a\.js/);
+  assert.match(out, /data:text\/plain,ok/);
+});
+
+test('runtime contains the browser interception layer', () => {
+  const runtime = buildRuntime(page);
+  assert.match(runtime, /FLASH_RUNTIME_INSTALLED/);
+  assert.match(runtime, /window\.fetch/);
+  assert.match(runtime, /XMLHttpRequest/);
+  assert.match(runtime, /WebSocket/);
+  assert.match(runtime, /EventSource/);
+  assert.match(runtime, /Worker/);
+  assert.match(runtime, /pushState/);
 });
