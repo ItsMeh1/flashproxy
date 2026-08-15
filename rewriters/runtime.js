@@ -34,10 +34,18 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
 
     const toWebSocket = (value) => {
       if (typeof value !== 'string') return value;
+      const v = value.trim();
       try {
-        const u = new URL(value, pageURL);
+        if (v.startsWith('ws://') || v.startsWith('wss://')) {
+          const u = new URL(v);
+          if (u.pathname.startsWith(WS_PREFIX)) {
+            return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + u.pathname + u.search;
+          }
+          return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + WS_PREFIX + u.href;
+        }
+        const u = new URL(v, pageURL);
         if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return value;
-        return WS_PREFIX + u.href;
+        return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + WS_PREFIX + u.href;
       } catch { return value; }
     };
 
@@ -64,7 +72,7 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
       get origin() { return pageURL.origin; },
       assign(value) { window.__flashNavigate(value); },
       replace(value) { window.__flashNavigate(value, true); },
-      reload() { window.location.reload(); },
+      reload() { location.reload(); },
       toString() { return pageURL.href; }
     };
 
@@ -92,11 +100,8 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
     };
 
     window.fetch = function(input, init) {
-      if (input instanceof Request) {
-        input = new Request(toProxy(input.url), input);
-      } else {
-        input = toProxy(input);
-      }
+      if (input instanceof Request) input = new Request(toProxy(input.url), input);
+      else input = toProxy(input);
       return nativeFetch(input, init);
     };
 
@@ -111,7 +116,8 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
     window.XMLHttpRequest.prototype = NativeXHR.prototype;
 
     window.WebSocket = function(url, protocols) {
-      return protocols === undefined ? new NativeWebSocket(toWebSocket(url)) : new NativeWebSocket(toWebSocket(url), protocols);
+      const target = toWebSocket(url);
+      return protocols === undefined ? new NativeWebSocket(target) : new NativeWebSocket(target, protocols);
     };
     window.WebSocket.prototype = NativeWebSocket.prototype;
 
@@ -125,13 +131,8 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
       window.Worker.prototype = NativeWorker.prototype;
     }
 
-    window.open = function(url, target, features) {
-      return nativeOpen(toProxy(url), target, features);
-    };
-
-    if (nativeSendBeacon) {
-      navigator.sendBeacon = function(url, data) { return nativeSendBeacon(toProxy(url), data); };
-    }
+    window.open = function(url, target, features) { return nativeOpen(toProxy(url), target, features); };
+    if (nativeSendBeacon) navigator.sendBeacon = function(url, data) { return nativeSendBeacon(toProxy(url), data); };
 
     history.pushState = function(state, title, url) {
       return nativePushState(state, title, typeof url === 'string' ? toProxy(url) : url);
@@ -145,12 +146,6 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
       const n = String(name).toLowerCase();
       if (['href', 'src', 'action', 'poster', 'data'].includes(n)) value = toProxy(value);
       return originalSetAttribute.call(this, name, value);
-    };
-
-    const originalCreateElement = Document.prototype.createElement;
-    Document.prototype.createElement = function(name, options) {
-      const element = originalCreateElement.call(this, name, options);
-      return element;
     };
 
     window.addEventListener('click', (event) => {
