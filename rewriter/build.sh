@@ -15,12 +15,15 @@ fi
 echo "[BUILD] Compiling Rust to WASM..."
 cargo build --target wasm32-unknown-unknown --release --manifest-path "$SCRIPT_DIR/Cargo.toml"
 
+WASM_FILE="$SCRIPT_DIR/../target/wasm32-unknown-unknown/release/flashproxy_rewriter.wasm"
+[ -f "$WASM_FILE" ] || { echo "[ERROR] WASM output not found: $WASM_FILE" >&2; exit 1; }
+
 echo "[BUILD] Running wasm-bindgen..."
 rm -rf pkg
 wasm-bindgen \
   --target nodejs \
   --out-dir pkg \
-  ../target/wasm32-unknown-unknown/release/flashproxy_rewriter.wasm
+  "$WASM_FILE"
 
 if command -v wasm-opt >/dev/null 2>&1; then
   echo "[BUILD] Optimizing with wasm-opt..."
