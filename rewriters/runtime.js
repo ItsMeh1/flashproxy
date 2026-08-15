@@ -4,6 +4,7 @@ function json(value) {
 
 export function buildRuntime(pageUrl, fpPrefix = '/fp') {
   const page = new URL(pageUrl);
+  const wsPrefix = '/wisp/';
   return `(() => {
     'use strict';
     if (window.__FLASH_RUNTIME_INSTALLED__) return;
@@ -11,10 +12,10 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
 
     const FP_PREFIX = ${json(fpPrefix)};
     const PAGE_URL = ${json(page.href)};
-    const WS_PREFIX = '/wisp/';
+    const WS_PREFIX = ${json(wsPrefix)};
     const pageURL = new URL(PAGE_URL);
 
-    const passthrough = (value) => value == null || typeof value !== 'string' || !value.trim() || /^(?:#|data:|blob:|javascript:|mailto:|tel:|sms:|about:|file:|chrome:|chrome-extension:|moz-extension:|view-source:)/i.test(value.trim());
+    const passthrough = value => value == null || typeof value !== 'string' || !value.trim() || /^(?:#|data:|blob:|javascript:|mailto:|tel:|sms:|about:|file:|chrome:|chrome-extension:|moz-extension:|view-source:)/i.test(value.trim());
     const absolute = (value, base = pageURL.href) => { try { return new URL(String(value), base).href; } catch { return value; } };
     const toProxy = (value, base = pageURL.href) => {
       if (passthrough(value)) return value;
@@ -22,31 +23,33 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
       if (raw.startsWith(FP_PREFIX + '/')) return raw;
       const resolved = absolute(raw, base);
       try {
-        const u = new URL(resolved);
-        if (u.protocol !== 'http:' && u.protocol !== 'https:') return value;
-        return FP_PREFIX + '/' + u.href;
+        const url = new URL(resolved);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? FP_PREFIX + '/' + url.href : value;
       } catch { return value; }
     };
     const toWebSocket = (value, base = pageURL.href) => {
       try {
-        const u = new URL(String(value), base);
-        if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return value;
-        return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + WS_PREFIX + u.href;
+        const url = new URL(String(value), base);
+        if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return value;
+        return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + WS_PREFIX + url.href;
       } catch { return value; }
     };
+    const toEventSource = value => toProxy(value);
 
     const nativeFetch = window.fetch?.bind(window);
+    const NativeRequest = window.Request;
     const NativeXHR = window.XMLHttpRequest;
     const NativeWebSocket = window.WebSocket;
     const NativeEventSource = window.EventSource;
     const NativeWorker = window.Worker;
     const NativeSharedWorker = window.SharedWorker;
+    const NativeImage = window.Image;
     const nativeOpen = window.open?.bind(window);
+    const nativeSendBeacon = navigator.sendBeacon?.bind(navigator);
     const nativePushState = history.pushState.bind(history);
     const nativeReplaceState = history.replaceState.bind(history);
-    const nativeSendBeacon = navigator.sendBeacon?.bind(navigator);
 
-    window.__flashproxy = { page: PAGE_URL, prefix: FP_PREFIX };
+    window.__flashproxy = { page: PAGE_URL, prefix: FP_PREFIX, wsPrefix: WS_PREFIX };
     window.__flashToProxy = toProxy;
     window.__flashToAbsolute = absolute;
     window.__flashProxyWebSocketUrl = toWebSocket;
@@ -57,7 +60,7 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
 
     if (nativeFetch) {
       window.fetch = function(input, init) {
-        if (input instanceof Request) input = new Request(toProxy(input.url), input);
+        if (NativeRequest && input instanceof NativeRequest) input = new NativeRequest(toProxy(input.url), input);
         else input = toProxy(input);
         return nativeFetch(input, init);
       };
@@ -71,18 +74,23 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
     }
 
     if (NativeWebSocket) {
-      window.WebSocket = function(url, protocols) {
+      const WrappedWebSocket = function(url, protocols) {
         const target = toWebSocket(url);
         return protocols === undefined ? new NativeWebSocket(target) : new NativeWebSocket(target, protocols);
       };
-      window.WebSocket.prototype = NativeWebSocket.prototype;
-      for (const key of ['CONNECTING','OPEN','CLOSING','CLOSED']) window.WebSocket[key] = NativeWebSocket[key];
+      WrappedWebSocket.prototype = NativeWebSocket.prototype;
+      Object.defineProperties(WrappedWebSocket, {
+        CONNECTING: { value: NativeWebSocket.CONNECTING }, OPEN: { value: NativeWebSocket.OPEN },
+        CLOSING: { value: NativeWebSocket.CLOSING }, CLOSED: { value: NativeWebSocket.CLOSED }
+      });
+      window.WebSocket = WrappedWebSocket;
     }
 
     if (NativeEventSource) {
-      window.EventSource = function(url, options) { return new NativeEventSource(toProxy(url), options); };
-      window.EventSource.prototype = NativeEventSource.prototype;
-      for (const key of ['CONNECTING','OPEN','CLOSED']) window.EventSource[key] = NativeEventSource[key];
+      const WrappedEventSource = function(url, options) { return new NativeEventSource(toEventSource(url), options); };
+      WrappedEventSource.prototype = NativeEventSource.prototype;
+      for (const key of ['CONNECTING', 'OPEN', 'CLOSED']) Object.defineProperty(WrappedEventSource, key, { value: NativeEventSource[key] });
+      window.EventSource = WrappedEventSource;
     }
 
     if (NativeWorker) {
@@ -96,6 +104,17 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
         return arguments.length === 2 ? new NativeSharedWorker(proxied, nameOrOptions) : new NativeSharedWorker(proxied, nameOrOptions, options);
       };
       window.SharedWorker.prototype = NativeSharedWorker.prototype;
+    }
+
+    if (NativeImage) {
+      const WrappedImage = function(...args) {
+        const image = args.length ? new NativeImage(...args) : new NativeImage();
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+        if (descriptor?.set) Object.defineProperty(image, 'src', { configurable: true, enumerable: true, get: descriptor.get?.bind(image), set: value => descriptor.set.call(image, toProxy(value)) });
+        return image;
+      };
+      WrappedImage.prototype = NativeImage.prototype;
+      window.Image = WrappedImage;
     }
 
     if (nativeOpen) window.open = (url, ...args) => nativeOpen(toProxy(url), ...args);
