@@ -8,9 +8,7 @@
   <img src="https://img.shields.io/github/stars/ItsMeh1/flashproxy?style=flat&color=orange" />
 </div>
 
-<div align="center">
-  [📦 Getting Started] (https://example.com)
-</div>
+[📦 Getting Started](./TUTORIAL.md) 
 
 #
 
