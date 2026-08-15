@@ -174,7 +174,7 @@ app.all(`${FP_PREFIX}/*`, async (request, reply) => {
         } 
         else if (contentType.includes('javascript') || contentType.includes('ecmascript') || contentType.includes('js')) {
             const text = await response.text();
-            rewritten = rewriteJs(text, fullTarget, FP_PREFIX);
+            rewritten = await rewriteJs(text, fullTarget, FP_PREFIX);
             safeHeaders['Content-Type'] = 'application/javascript';
         } 
         else {
