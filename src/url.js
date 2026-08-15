@@ -1,19 +1,19 @@
 const DEFAULT_PREFIX = '/fp';
 const DEFAULT_WS_PREFIX = '/wisp/';
-
 const PASSTHROUGH_SCHEMES = new Set([
   'data:', 'blob:', 'javascript:', 'mailto:', 'tel:', 'sms:', 'about:',
   'file:', 'chrome:', 'chrome-extension:', 'moz-extension:', 'view-source:'
 ]);
 
+function trimValue(value) {
+  return String(value ?? '').trim();
+}
+
 export function isPassthroughUrl(value) {
-  if (value == null) return true;
-  const trimmed = String(value).trim();
-  if (!trimmed || trimmed.startsWith('#')) return true;
-  const lower = trimmed.toLowerCase();
-  for (const scheme of PASSTHROUGH_SCHEMES) {
-    if (lower.startsWith(scheme)) return true;
-  }
+  const raw = trimValue(value);
+  if (!raw || raw.startsWith('#')) return true;
+  const lower = raw.toLowerCase();
+  for (const scheme of PASSTHROUGH_SCHEMES) if (lower.startsWith(scheme)) return true;
   return false;
 }
 
@@ -28,18 +28,19 @@ export function isWebUrl(value) {
 }
 
 export function normalizeTarget(value, baseUrl) {
-  const raw = String(value ?? '').trim();
+  const raw = trimValue(value);
   if (isPassthroughUrl(raw)) return null;
   try {
     const resolved = new URL(raw, baseUrl);
-    return isWebUrl(resolved.href) ? resolved.href : null;
+    if (!['http:', 'https:'].includes(resolved.protocol)) return null;
+    return resolved.href;
   } catch {
     return null;
   }
 }
 
 export function proxyUrl(value, baseUrl, prefix = DEFAULT_PREFIX) {
-  const raw = String(value ?? '').trim();
+  const raw = trimValue(value);
   if (isPassthroughUrl(raw)) return raw;
   if (raw.startsWith(`${prefix}/http://`) || raw.startsWith(`${prefix}/https://`)) return raw;
   const target = normalizeTarget(raw, baseUrl);
@@ -47,14 +48,14 @@ export function proxyUrl(value, baseUrl, prefix = DEFAULT_PREFIX) {
 }
 
 export function unproxyUrl(value, prefix = DEFAULT_PREFIX) {
-  const raw = String(value ?? '').trim();
+  const raw = trimValue(value);
   if (!raw.startsWith(`${prefix}/`)) return raw;
   const target = raw.slice(prefix.length + 1);
   return isWebUrl(target) ? target : raw;
 }
 
 export function proxyWebSocketUrl(value, baseUrl, wsPrefix = DEFAULT_WS_PREFIX) {
-  const raw = String(value ?? '').trim();
+  const raw = trimValue(value);
   if (!raw) return raw;
   try {
     const resolved = new URL(raw, baseUrl);
@@ -66,15 +67,14 @@ export function proxyWebSocketUrl(value, baseUrl, wsPrefix = DEFAULT_WS_PREFIX) 
 }
 
 export function getTargetFromProxyPath(pathname, prefix = DEFAULT_PREFIX) {
-  if (!pathname.startsWith(`${prefix}/`)) return null;
+  if (typeof pathname !== 'string' || !pathname.startsWith(`${prefix}/`)) return null;
   const target = pathname.slice(prefix.length + 1);
   return isWebUrl(target) ? target : null;
 }
 
 export function isProxyUrl(value, prefix = DEFAULT_PREFIX) {
-  return typeof value === 'string' && (
-    value.startsWith(`${prefix}/http://`) || value.startsWith(`${prefix}/https://`)
-  );
+  const raw = trimValue(value);
+  return raw.startsWith(`${prefix}/http://`) || raw.startsWith(`${prefix}/https://`);
 }
 
 export { DEFAULT_PREFIX, DEFAULT_WS_PREFIX };
