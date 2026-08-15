@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlashProxy Lite v2.0</title>
+  <meta name="description" content="Serverless client-side web proxy with intelligent fallback.">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: #0a0a0f; }
+  </style>
+<base target="_blank">
+</head>
+<body>
+  <!-- FlashProxy Lite v2.0.0 -->
+  <!-- Load order matters: Core → Strategies → Rewriter → UI -->
+  <script src="./flashproxy-core.js"></script>
+  <script src="./flashproxy-strategies.js"></script>
+  <script src="./flashproxy-rewriter.js"></script>
+  <script src="./flashproxy-ui.js"></script>
+  <script>
+    (async function() {
+      'use strict';
+
+      // Initialize the proxy engine
+      const proxy = new FlashProxyLite({
+        strategyOrder: ['direct', 'iframe', 'serviceworker', 'corsproxy'],
+        rewriteHtml: true,
+        blockScripts: false,
+        stripCookies: true,
+        timeout: 15000,
+        debug: false
+      });
+
+      // Wait for initialization (SW registration, etc.)
+      await proxy.init();
+
+      // Mount the UI
+      const ui = new FlashProxyUI(proxy, document.body);
+      ui.mount();
+
+      // Handle URL parameter ?url=...
+      const params = new URLSearchParams(location.search);
+      const targetUrl = params.get('url');
+      if (targetUrl) {
+        proxy.navigate(targetUrl);
+      }
+
+      console.log('[FlashProxy] System ready. Version:', FlashProxyLite.VERSION);
+    })();
+  </script>
+</body>
+</html>
