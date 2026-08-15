@@ -25,12 +25,22 @@ app.addContentTypeParser('*', { parseAs: 'buffer' }, async (_request, body) => b
 const sessions = new Map();
 const SESSION_TTL = 1000 * 60 * 60 * 24;
 
+function readBrowserCookie(request, name) {
+  const header = request.headers.cookie || '';
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index < 0) continue;
+    if (part.slice(0, index).trim() === name) return part.slice(index + 1).trim();
+  }
+  return null;
+}
+
 function newSession() {
   return { created: Date.now(), touched: Date.now(), cookies: new Map() };
 }
 
 function getSession(request, reply) {
-  let id = request.cookies?.[SESSION_COOKIE];
+  let id = readBrowserCookie(request, SESSION_COOKIE);
   if (!id || !sessions.has(id)) {
     id = crypto.randomBytes(18).toString('base64url');
     sessions.set(id, newSession());
@@ -116,7 +126,6 @@ function cleanRequestHeaders(input) {
     if (hopByHop.has(key.toLowerCase()) || key.toLowerCase() === 'cookie') continue;
     headers[key] = value;
   }
-  // Let undici fetch a plain representation that we can safely rewrite.
   headers['accept-encoding'] = 'identity';
   return headers;
 }
@@ -127,8 +136,7 @@ function cleanResponseHeaders(headers) {
     'content-length', 'content-encoding', 'transfer-encoding', 'connection', 'keep-alive',
     'set-cookie', 'content-security-policy', 'content-security-policy-report-only',
     'x-frame-options', 'cross-origin-opener-policy', 'cross-origin-embedder-policy',
-    'cross-origin-resource-policy', 'access-control-allow-origin', 'access-control-allow-credentials',
-    'etag'
+    'cross-origin-resource-policy', 'access-control-allow-origin', 'access-control-allow-credentials', 'etag'
   ]);
   headers.forEach((value, key) => {
     if (!removed.has(key.toLowerCase())) output[key] = value;
@@ -137,12 +145,8 @@ function cleanResponseHeaders(headers) {
 }
 
 function rewriteRedirect(location, targetUrl) {
-  try {
-    const absolute = new URL(location, targetUrl).href;
-    return `${FP_PREFIX}/${absolute}`;
-  } catch {
-    return location;
-  }
+  try { return `${FP_PREFIX}/${new URL(location, targetUrl).href}`; }
+  catch { return location; }
 }
 
 function cleanupSessions() {
@@ -152,11 +156,8 @@ function cleanupSessions() {
 setInterval(cleanupSessions, 10 * 60 * 1000).unref();
 
 let bareServer;
-try {
-  bareServer = createBareServer('/bare/');
-} catch (error) {
-  console.warn('[Bare] initialization failed:', error.message);
-}
+try { bareServer = createBareServer('/bare/'); }
+catch (error) { console.warn('[Bare] initialization failed:', error.message); }
 
 app.server.on('upgrade', (req, socket, head) => {
   if (bareServer?.shouldRoute(req)) return bareServer.routeUpgrade(req, socket, head);
@@ -164,12 +165,7 @@ app.server.on('upgrade', (req, socket, head) => {
   socket.destroy();
 });
 
-await app.register(fastifyStatic, {
-  root: path.join(__dirname, 'public'),
-  prefix: '/',
-  wildcard: true
-});
-
+await app.register(fastifyStatic, { root: path.join(__dirname, 'public'), prefix: '/', wildcard: true });
 app.get('/sw.js', async (_request, reply) => reply.sendFile('sw.js', path.join(__dirname, 'src')));
 app.get('/fp-api.js', async (_request, reply) => reply.sendFile('api.js', path.join(__dirname, 'src')));
 
@@ -188,18 +184,11 @@ app.all(`${FP_PREFIX}/*`, async (request, reply) => {
     if (cookies) headers.cookie = cookies;
 
     const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body;
-    const upstream = await fetch(targetUrl, {
-      method: request.method,
-      headers,
-      body,
-      redirect: 'manual'
-    });
-
+    const upstream = await fetch(targetUrl, { method: request.method, headers, body, redirect: 'manual' });
     const setCookies = upstream.headers.getSetCookie?.() || upstream.headers.get('set-cookie');
     if (setCookies) storeCookies(session, setCookies, targetUrl);
 
     const responseHeaders = cleanResponseHeaders(upstream.headers);
-
     if ([301, 302, 303, 307, 308].includes(upstream.status)) {
       const location = upstream.headers.get('location');
       if (location) responseHeaders.location = rewriteRedirect(location, targetUrl);
@@ -211,18 +200,14 @@ app.all(`${FP_PREFIX}/*`, async (request, reply) => {
     for (const [key, value] of Object.entries(responseHeaders)) reply.header(key, value);
 
     if (contentType.includes('text/html')) {
-      const text = await upstream.text();
-      return reply.code(upstream.status).type('text/html; charset=utf-8').send(await rewriteHtml(text, targetUrl, FP_PREFIX));
+      return reply.code(upstream.status).type('text/html; charset=utf-8').send(await rewriteHtml(await upstream.text(), targetUrl, FP_PREFIX));
     }
     if (contentType.includes('text/css')) {
-      const text = await upstream.text();
-      return reply.code(upstream.status).type('text/css; charset=utf-8').send(rewriteCss(text, targetUrl, FP_PREFIX));
+      return reply.code(upstream.status).type('text/css; charset=utf-8').send(rewriteCss(await upstream.text(), targetUrl, FP_PREFIX));
     }
     if (/javascript|ecmascript/i.test(contentType)) {
-      const text = await upstream.text();
-      return reply.code(upstream.status).type('application/javascript; charset=utf-8').send(await rewriteJs(text, targetUrl, FP_PREFIX));
+      return reply.code(upstream.status).type('application/javascript; charset=utf-8').send(await rewriteJs(await upstream.text(), targetUrl, FP_PREFIX));
     }
-
     return reply.code(upstream.status).send(Buffer.from(await upstream.arrayBuffer()));
   } catch (error) {
     request.log.error(error);
