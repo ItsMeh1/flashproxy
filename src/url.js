@@ -6,11 +6,14 @@ const PASSTHROUGH_SCHEMES = new Set([
 ]);
 
 export function isPassthroughUrl(value) {
-  if (!value) return true;
+  if (value == null) return true;
   const trimmed = String(value).trim();
   if (!trimmed || trimmed.startsWith('#')) return true;
   const lower = trimmed.toLowerCase();
-  return [...PASSTHROUGH_SCHEMES].some(scheme => lower.startsWith(scheme));
+  for (const scheme of PASSTHROUGH_SCHEMES) {
+    if (lower.startsWith(scheme)) return true;
+  }
+  return false;
 }
 
 export function isWebUrl(value) {
@@ -50,7 +53,7 @@ export function proxyUrl(value, baseUrl, prefix = DEFAULT_PREFIX) {
 }
 
 export function unproxyUrl(value, prefix = DEFAULT_PREFIX) {
-  const raw = String(value ?? '');
+  const raw = String(value ?? '').trim();
   if (!raw.startsWith(`${prefix}/`)) return raw;
   const target = raw.slice(prefix.length + 1);
   return isWebUrl(target) ? target : raw;
@@ -74,6 +77,10 @@ export function getTargetFromProxyPath(pathname, prefix = DEFAULT_PREFIX) {
   const target = pathname.slice(prefix.length + 1);
   if (!isWebUrl(target)) return null;
   return target;
+}
+
+export function isProxyUrl(value, prefix = DEFAULT_PREFIX) {
+  return typeof value === 'string' && (value.startsWith(`${prefix}/http://`) || value.startsWith(`${prefix}/https://`));
 }
 
 export { DEFAULT_PREFIX };
