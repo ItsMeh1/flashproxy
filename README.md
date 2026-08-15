@@ -1,79 +1,129 @@
 <div align="center">
   <img src="./logo.png" alt="Flash Proxy" width="220">
-  <h1>Flash Proxy ⚡</h1>
-  <p>A web proxy and rewriting engine built to make proxied sites behave as normally as possible in a browser.</p>
+
+  # Flash Proxy ⚡
+
+  **A fast, browser-focused web proxy and rewriting engine.**
+
+  <p>Making proxied websites behave like normal websites is the goal.</p>
 </div>
 
-> **Status:** active development. Flash is being built in five major parts; this branch is the Part 2 rebuild.
+---
 
-## What Flash does
+> 🚧 **Development status:** Flash Proxy is being rebuilt in five major parts. This branch contains the ongoing **Part 4 networking and compatibility work**.
 
-- HTTP/HTTPS proxying through `/fp/<absolute-url>`
-- Parser-based HTML URL rewriting with `htmlparser2`
-- CSS `url(...)` and `@import` rewriting
-- JavaScript rewriting through the Rust/WASM engine when built
-- Conservative JavaScript fallback when WASM is unavailable
-- Browser runtime interception for `fetch`, XHR, WebSocket, EventSource, Worker, `window.open`, history APIs and `sendBeacon`
-- Server-side, per-browser-session target cookie storage
-- Redirect rewriting
-- Bare Server and Wisp upgrade support
-- A small browser-facing `fpAPI`
-- Regression tests for URL/HTML/CSS rewriting
+## ✨ What Flash does
 
-## Run it
+Flash separates the hard parts of browser proxying into layers instead of trying to solve everything with one giant rewriter.
+
+- 🌐 HTTP/HTTPS proxying through `/fp/<absolute-url>`
+- 🧩 Parser-based HTML rewriting
+- 🎨 CSS `url(...)` and `@import` rewriting
+- ⚡ AST-based JavaScript rewriting through Rust/WASM
+- 🛟 Conservative JavaScript fallback
+- 🧠 Browser runtime interception for Fetch, XHR, WebSocket, EventSource, Workers and navigation APIs
+- 🍪 Per-browser-session cookie storage
+- ↪️ Redirect rewriting
+- 🔌 Bare Server + Wisp transport support
+- 🧪 Regression tests
+- 🖥️ A small browser-facing `fpAPI`
+
+## 🚀 Quick start
+
+### Requirements
+
+- Node.js 18+
+- npm
+- Rust + `wasm-pack` if you want to build the optional WASM JavaScript rewriter
+
+### Install
 
 ```bash
 npm install
+```
+
+### Test
+
+```bash
 npm test
+```
+
+### Start
+
+```bash
 npm start
 ```
 
-Then open `http://localhost:3000`.
+Then open:
 
-The demo UI uses the public API in `src/api.js` and loads proxied pages inside an iframe.
+```text
+http://localhost:3000
+```
 
-## Rust/WASM JavaScript rewriter
+### Development mode
 
-The high-quality JavaScript transform is implemented in `rewriter/src/lib.rs` and uses Oxc's parser/AST visitor. Build it with:
+```bash
+npm run dev
+```
+
+## ⚡ Build the JavaScript rewriter
+
+The high-quality JavaScript transformer lives in `rewriter/src/lib.rs` and uses Oxc's AST machinery.
 
 ```bash
 npm run rewriter:build
 ```
 
-The Node runtime automatically uses the generated WASM module when it exists. If it cannot be loaded, Flash uses a deliberately conservative fallback instead of silently serving completely untouched JavaScript.
+Flash can fall back to conservative URL rewriting when the generated WASM module is unavailable.
 
-## Architecture
+## 🏗️ Architecture
 
 ```text
-Browser UI
-   │
-   ▼
-fpAPI ─────── iframe
-               │
-               ▼
-          Flash runtime
-               │
-               ▼
-        /fp/<target URL>
-               │
-       ┌───────┼────────┐
-       ▼       ▼        ▼
-      HTTP    HTML/CSS  JavaScript
-       │       │        │
-       │       │     Rust/WASM
-       │       │        │
-       └───────┴────────┘
-               │
-               ▼
-          target website
-
-WebSockets ──► Wisp
-Other proxy traffic ──► Bare Server
+                         ┌──────────────────┐
+                         │   Flash Browser   │
+                         │   UI + fpAPI      │
+                         └────────┬─────────┘
+                                  │
+                                  ▼
+                         ┌──────────────────┐
+                         │ Flash Runtime     │
+                         │ fetch / XHR / WS │
+                         │ workers / nav    │
+                         └────────┬─────────┘
+                                  │
+                                  ▼
+                         ┌──────────────────┐
+                         │   /fp/<target>   │
+                         └────────┬─────────┘
+                                  │
+              ┌───────────────────┼───────────────────┐
+              ▼                   ▼                   ▼
+         HTTP transport      Response rewriting   WS transport
+              │                   │                   │
+              │          ┌────────┼────────┐          │
+              │          ▼        ▼        ▼          │
+              │        HTML      CSS       JS        │
+              │        parser   scanner   Rust/WASM  │
+              │          └────────┼────────┘          │
+              │                   │                   │
+              └───────────────────┼───────────────────┘
+                                  ▼
+                           Target website
 ```
 
-The important design rule is that **network transport, document rewriting, and browser runtime interception are separate layers**. This makes Flash easier to extend instead of turning the proxy into one giant collection of regexes.
+### Part 4 focus
 
-## API
+Part 4 is about making the layers cooperate reliably:
+
+- request headers are filtered before upstream fetches
+- browser-session cookies are stored and selected by domain/path
+- redirects become Flash URLs
+- rewritten responses no longer advertise stale lengths/encodings
+- binary responses can stream instead of being buffered wholesale
+- WebSocket/Bare/Wisp routing remains separate from normal HTTP proxying
+- HTML rewriting removes integrity metadata that would otherwise reject modified resources
+
+## 📦 API
 
 ```js
 import { fpAPI } from '/fp-api.js';
@@ -86,25 +136,39 @@ fpAPI.forward(container);
 fpAPI.reload(container);
 ```
 
-## Project layout
+## 📁 Project layout
 
 ```text
 public/          Demo UI
-src/             Browser API, runtime support and URL helpers
+src/             Browser API, URL helpers and service-worker support
 rewriters/       HTML, CSS, JS and browser-runtime rewriting
 rewriter/        Rust/WASM JavaScript transformer
 tests/           Regression tests
 server.js        HTTP + Bare + Wisp server
+logo.png         The beautiful Flash logo ⚡
 ```
 
-## Five-part rebuild
+## 🛠️ Five-part rebuild
 
-1. **Part 1 — Foundation:** separate transport, URL handling, rewriting and runtime layers.
-2. **Part 2 — Resource rewriting:** strengthen URL resolution and HTML/CSS coverage, plus regression tests.
-3. **Part 3 — JavaScript/runtime:** deepen AST transforms and browser API emulation.
-4. **Part 4 — Networking:** harden cookies, redirects, headers, WebSockets, workers and edge cases.
-5. **Part 5 — Compatibility:** integration testing and final fixes against increasingly complex real-world sites.
+| Part | Focus | Status |
+|---|---|---|
+| 1 | Foundation | ✅ |
+| 2 | Resource rewriting | ✅ |
+| 3 | JavaScript + browser runtime | ✅ |
+| 4 | Networking + compatibility hardening | 🔨 **Current** |
+| 5 | Integration testing + final polish | ⏳ |
 
-## License note
+## 📚 Learn more
 
-Flash Proxy is its own implementation. The project may use compatible open-source dependencies, but Flash's rewriting/runtime code is not intended to be a renamed copy of another proxy implementation.
+- **[Tutorial](./TUTORIAL.md)** — install Flash and understand the request/rewriting flow.
+- **[Package configuration](./package.json)** — scripts and dependencies.
+
+## ⚖️ License
+
+Flash Proxy is its own implementation. It can use open-source dependencies, but Flash's own rewriting and runtime code is developed independently rather than being a renamed copy of another proxy implementation.
+
+---
+
+<div align="center">
+  <sub>Made with ⚡ and an unreasonable amount of browser debugging.</sub>
+</div>
