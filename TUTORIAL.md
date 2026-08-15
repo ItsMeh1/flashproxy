@@ -9,7 +9,7 @@
 
 Welcome to Flash Proxy! This guide gets you from **clone → running proxy → understanding the pipeline → developing it**.
 
-> 💡 Flash is still under active development. Some advanced sites will need the Part 5 compatibility work before they behave perfectly.
+> 💡 Flash is now a **10-part rebuild**. Part 5 is the broad compatibility pass; Parts 6–10 will push the project through harder sites, runtime edge cases, performance work and final integration testing.
 
 ## 1. 📦 Install
 
@@ -25,7 +25,11 @@ npm install
 npm test
 ```
 
-The tests exercise the URL and rewriting layers. Run them after changing a rewriter so small changes do not quietly break existing behavior.
+For a continuously running test process:
+
+```bash
+npm run test:watch
+```
 
 ## 3. ⚡ Start Flash
 
@@ -39,7 +43,7 @@ Open:
 http://localhost:3000
 ```
 
-For development, use:
+For development:
 
 ```bash
 npm run dev
@@ -53,7 +57,7 @@ Flash accepts an absolute HTTP/HTTPS URL after `/fp/`:
 http://localhost:3000/fp/https://example.com/
 ```
 
-The server fetches the target and chooses a response path:
+The server chooses a response path:
 
 ```text
 HTML       → HTML parser + URL rewriting + runtime injection
@@ -75,9 +79,7 @@ fpAPI.go('cats', container); // search text
 fpAPI.goRAW('https://example.com/some/path', container);
 ```
 
-`go()` accepts normal browser-style input such as domains, IP addresses and search text. `goRAW()` takes the URL as-is.
-
-Navigation helpers:
+Navigation:
 
 ```js
 fpAPI.back(container);
@@ -85,34 +87,36 @@ fpAPI.forward(container);
 fpAPI.reload(container);
 ```
 
-## 6. 🍪 What happens to cookies?
+`go()` resolves domains, IP addresses and search text. `goRAW()` requires an absolute HTTP(S) URL.
 
-The browser talks to Flash, so the target site's cookies cannot simply be left as ordinary target-domain cookies.
+## 6. 🍪 Cookies
 
-Flash instead keeps a per-session cookie jar and selects cookies using the target's:
+The browser talks to Flash rather than directly to the target site. Flash therefore keeps a per-session cookie jar.
+
+Cookies are selected using:
 
 - domain
 - path
 - secure flag
 - expiration
 
-That lets multiple proxied sites keep separate cookie state inside the same Flash session.
+This keeps proxied sites from accidentally sharing their cookies with one another.
 
-## 7. ↪️ What happens to redirects?
+## 7. ↪️ Redirects
 
-Suppose the target returns:
+If the target returns:
 
 ```text
 Location: https://example.com/login
 ```
 
-Flash converts it to a Flash URL so the browser stays inside the proxy:
+Flash converts it into:
 
 ```text
 /fp/https://example.com/login
 ```
 
-Relative redirects are resolved against the original target URL first.
+Relative redirects are resolved against the original target URL before they are proxied.
 
 ## 8. 🧩 How rewriting works
 
@@ -145,7 +149,7 @@ Target         Flash response layer
              Flash runtime
 ```
 
-The browser runtime then catches APIs that can create new network requests, including Fetch, XHR, WebSocket, EventSource and Workers.
+The runtime catches browser APIs that can create new network requests, including Fetch, XHR, WebSocket, EventSource and Workers. Navigation APIs such as `window.open`, `history.pushState` and `history.replaceState` are also covered.
 
 ## 9. 🦀 Build the Rust/WASM rewriter
 
@@ -161,7 +165,9 @@ Build it with:
 npm run rewriter:build
 ```
 
-The generated module is used automatically when available. If it cannot be loaded, Flash uses a conservative fallback instead of making the whole page fail.
+The build script checks for the required Rust tooling and installs the WebAssembly target when `rustup` is available. `wasm-opt` is optional.
+
+If the generated module cannot be loaded, Flash uses a conservative fallback instead of failing the entire response.
 
 ## 10. 🔧 Change the code
 
@@ -171,6 +177,7 @@ Useful locations:
 server.js              Network transport + response handling
 src/url.js             URL normalization/proxy helpers
 src/api.js             Browser-facing API
+src/sw.js              Service-worker routing
 rewriters/html.js      HTML rewriting
 rewriters/css.js       CSS rewriting
 rewriters/js/          JavaScript rewriting bridge
@@ -193,32 +200,51 @@ npm run rewriter:build
 npm test
 ```
 
-## 11. 🧠 Part 4 notes
+## 11. ⏱️ Upstream timeouts
 
-Part 4 is primarily about **network reliability**, not making the UI flashy.
+Flash does not let a dead upstream request hang forever. The default timeout is 30 seconds.
 
-The important rules are:
+You can change it with:
 
-1. Keep target cookies isolated per Flash session.
-2. Never forward hop-by-hop headers blindly.
-3. Do not claim a stale `Content-Length` after rewriting a response.
-4. Do not keep upstream compression when Flash needs to inspect the body.
-5. Rewrite redirects before returning them.
-6. Stream large/binary resources when possible.
-7. Keep WebSocket/Wisp and Bare transport separate from normal HTTP fetching.
-8. If Flash modifies resource bytes, stale integrity metadata must not survive.
+```bash
+FLASH_UPSTREAM_TIMEOUT=60000 npm start
+```
 
-## 12. 🚀 What's next?
+The value is milliseconds.
 
-The five-part plan is:
+## 12. 🧪 What Part 5 changed
+
+Part 5 is the **whole-project compatibility pass**. It improves the pieces that have to cooperate:
+
+1. URL normalization
+2. Browser navigation/history
+3. Fetch + `Request`
+4. XHR
+5. WebSocket
+6. EventSource
+7. Workers
+8. Service-worker behavior
+9. Cookie/session handling
+10. upstream timeouts
+11. HTML/CSS/JS regression coverage
+12. responsive browser-shell UI
+13. CI validation
+14. WASM build portability
+
+## 13. 🛣️ The ten-part roadmap
 
 - ✅ **Part 1 — Foundation**
 - ✅ **Part 2 — Resource rewriting**
 - ✅ **Part 3 — JavaScript + runtime**
-- 🔨 **Part 4 — Networking + compatibility**
-- ⏳ **Part 5 — Integration testing + final polish**
+- ✅ **Part 4 — Networking + compatibility hardening**
+- 🔨 **Part 5 — Whole-project compatibility pass**
+- ⏳ **Part 6 — Difficult-site compatibility**
+- ⏳ **Part 7 — Advanced JS/runtime coverage**
+- ⏳ **Part 8 — Transport + media edge cases**
+- ⏳ **Part 9 — Performance + memory tuning**
+- ⏳ **Part 10 — Final integration, testing + polish**
 
-Part 5 is where we can hammer Flash against difficult real-world pages, find the weird failures, and fix them instead of assuming everything works because `example.com` loaded.
+Part 5 is not being declared “perfect.” The point is to establish a much stronger baseline so Parts 6–10 can focus on failures found through real compatibility testing.
 
 ---
 
