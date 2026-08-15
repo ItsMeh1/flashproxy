@@ -1,118 +1,100 @@
-<h1 align="center">Flash Proxy</h1>
-<div align="center">
-  <img src="logo.png" height="200" />
-</div>
+# Flash Proxy ⚡
 
-<div align="center">
-  <img src="https://img.shields.io/github/issues/ItsMeh1/flashproxy?style=flat&color=orange" />
-  <img src="https://img.shields.io/github/stars/ItsMeh1/flashproxy?style=flat&color=orange" />
-</div>
+Flash Proxy is an experimental web proxy/rewriting engine designed to make proxied sites behave as normally as possible in a browser.
 
-[📦 Getting Started](./TUTORIAL.md) 
+> **Status:** active development. Flash is not yet a drop-in replacement for Scramjet on every complex site.
 
-# Prerequisites
+## What Flash does
 
-You'll need these to run Flash Proxy.
-```bash
-# 1. Node.js 18+ (you probably have this)
-node --version
+- HTTP/HTTPS proxying through `/fp/<absolute-url>`
+- HTML rewriting with `htmlparser2`
+- CSS `url(...)` and `@import` rewriting
+- JavaScript rewriting through the Rust/WASM engine when built
+- Conservative JavaScript fallback when WASM is unavailable
+- Browser runtime interception for `fetch`, XHR, WebSocket, EventSource, Worker, `window.open`, history APIs and `sendBeacon`
+- Server-side, per-browser-session target cookie storage
+- Redirect rewriting
+- Bare Server and Wisp upgrade support
+- A small browser-facing `fpAPI`
+- Regression tests for the URL/HTML/CSS rewriting layer
 
-# 2. Rust toolchain
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# 3. WASM target for Rust
-rustup target add wasm32-unknown-unknown
-
-# 4. wasm-bindgen-cli (bridges Rust WASM to JS)
-cargo install wasm-bindgen-cli
-
-# 5. wasm-opt (Binaryen — optimizes .wasm size & speed)
-# macOS:
-brew install binaryen
-# Ubuntu/Debian:
-sudo apt install binaryen
-# Windows (via chocolatey):
-choco install binaryen
-# Or download from: https://github.com/WebAssembly/binaryen/releases
-```
-
-Verify everything:
-
-```bash
-rustc --version        # Should print 1.80+
-wasm-bindgen --version # Should print 0.2.x
-wasm-opt --version     # Should print version 120+
-```
-
-## Build & Run
-
-```bash
-# 1. Build WASM (one time, or after changing Rust)
-cd rewriter && bash build.sh
-
-# 2. Commit pkg/ so others don't need Rust (optional)
-git add rewriter/pkg/
-git commit -m "Add prebuilt WASM"
-
-# 3. Run
-npm start
-```
+## Run it
 
 ```bash
 npm install
+npm test
 npm start
 ```
-Open http://localhost:3000.
 
-## API
-fp.go("youtube.com")      // URL
-fp.go("how to code")      // Search query
-fp.go("192.168.1.1")      // IP address
-fp.goRaw("https://...")   // Bypass detection
+Then open `http://localhost:3000`.
 
-It automatically formats searches, links, everything. All of it for you automatically.
+The demo UI uses the public API in `src/api.js` and loads proxied pages inside an iframe.
+
+## Rust/WASM JavaScript rewriter
+
+The high-quality JavaScript transform is implemented in `rewriter/src/lib.rs` and uses Oxc's parser/AST visitor. Build it with:
+
+```bash
+npm run rewriter:build
+```
+
+The Node runtime automatically uses the generated WASM module when it exists. If it cannot be loaded, Flash uses a deliberately conservative fallback instead of silently serving completely untouched JavaScript.
 
 ## Architecture
-Oxc Parser: Fast Rust-based JS AST parsing for byte-span rewrites
-Cookie Jar: Per-domain cookie storage with automatic forwarding
-Wisp: WebSocket TCP tunneling for WebSocket proxying
-Rewriters: HTML/CSS/JS URL rewriting + runtime API injection
 
+```text
+Browser UI
+   │
+   ▼
+fpAPI ─────── iframe
+               │
+               ▼
+          Flash runtime
+               │
+               ▼
+        /fp/<target URL>
+               │
+       ┌───────┼────────┐
+       ▼       ▼        ▼
+      HTTP    HTML/CSS  JavaScript
+       │       │        │
+       │       │     Rust/WASM
+       │       │        │
+       └───────┴────────┘
+               │
+               ▼
+          target website
 
----
-
-## How to Use
-
-```bash
-mkdir flashproxy && cd flashproxy
-# Create all files above in their folders
-npm install
-npm start
-# Open http://localhost:3000
-# Type "example.com" or "youtube.com" and hit Go
+WebSockets ──► Wisp
+Other proxy traffic ──► Bare Server
 ```
-This is a working proxy. It has a cookie jar, handles all HTTP methods, rewrites HTML/CSS/JS, injects runtime shims, and runs a Wisp server for WebSockets. It won't beat Scramjet or other proxy systems on complex sites yet, but the architecture is the same.
 
+The important design rule is that **network transport, document rewriting, and browser runtime interception are separate layers**. This makes Flash easier to extend instead of turning the proxy into one giant collection of regexes.
 
----
+## API
 
-## Features & Stuff
+```js
+import { fpAPI } from '/fp-api.js';
 
-| Feature | Status |
-|--------|--------|
-| **Oxc parser** (`oxc-parser`) | ✅ Back in `rewriters/js/rewriter.js` |
-| **Oxc walker** (`oxc-walker`) | ✅ In `package.json` for future use |
-| **Cookie jar** | ✅ Full per-domain storage + forwarding |
-| **All HTTP methods** | ✅ `app.all()` with body forwarding |
-| **Wisp server** | ✅ Proper `wisp-js/server` import |
-| **Redirect handling** | ✅ 301/302 rewritten to proxy URLs |
-| **Security header stripping** | ✅ CSP, X-Frame-Options removed |
-| **Template literal rewriting** | ✅ Via Oxc AST |
-| **Smart `fp.go()`** | ✅ Auto URL vs search detection |
-| **File structure** | ✅ Matches your screenshot |
+fpAPI.go('example.com', container);
+fpAPI.go('cats', container); // search
+fpAPI.goRAW('https://example.com/path', container);
+fpAPI.back(container);
+fpAPI.forward(container);
+fpAPI.reload(container);
+```
 
-Run `npm install && npm start`. It works.
+## Project layout
 
-Made with ❤️ by @ItsMeh1
-Made with the help of Kimi K2.6
+```text
+public/          Demo UI
+src/             Browser API, runtime support and URL helpers
+rewriters/       HTML, CSS, JS and browser-runtime rewriting
+rewriter/        Rust/WASM JavaScript transformer
+tests/           Regression tests
+server.js        HTTP + Bare + Wisp server
+```
+
+## License note
+
+Flash Proxy is its own implementation. The project may use compatible open-source dependencies, but Flash's rewriting/runtime code is not intended to be a renamed copy of another proxy implementation.
