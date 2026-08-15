@@ -11,31 +11,45 @@ const URL_ATTRIBUTES = new Set([
   'longdesc', 'ping', 'profile', 'usemap', 'icon', 'itemid', 'itemprop', 'itemtype'
 ]);
 
+const SCRIPT_TYPES = new Set(['', 'text/javascript', 'application/javascript', 'application/ecmascript', 'text/ecmascript', 'module']);
+
 function rewriteSrcset(value, baseUrl, prefix) {
   return String(value).split(',').map(candidate => {
-    const match = candidate.trim().match(/^(\S+)(.*)$/);
+    const match = candidate.trim().match(/^(\S+)(.*)$/s);
     if (!match) return candidate;
     return `${proxyUrl(match[1], baseUrl, prefix)}${match[2]}`;
   }).join(', ');
+}
+
+function rewritePing(value, baseUrl, prefix) {
+  return String(value).split(/\s+/).filter(Boolean).map(url => proxyUrl(url, baseUrl, prefix)).join(' ');
 }
 
 function rewriteMetaRefresh(value, baseUrl, prefix) {
   return String(value).replace(/(\burl\s*=\s*)([^;]+)/i, (_, head, target) => `${head}${proxyUrl(target.trim(), baseUrl, prefix)}`);
 }
 
+function rewriteUrlAttribute(name, value, baseUrl, prefix) {
+  if (name === 'ping') return rewritePing(value, baseUrl, prefix);
+  if (name === 'srcset' || name === 'imagesrcset') return rewriteSrcset(value, baseUrl, prefix);
+  return proxyUrl(value, baseUrl, prefix);
+}
+
 function walk(node, baseUrl, prefix) {
   if (!node?.children) return;
   for (const child of node.children) {
-    if (!child?.children && child.type !== 'tag' && child.type !== 'script' && child.type !== 'style') continue;
+    if (!child) continue;
     const attrs = child.attribs || {};
     const tag = String(child.name || '').toLowerCase();
 
     for (const [name, value] of Object.entries(attrs)) {
       const lower = name.toLowerCase();
       if (value == null) continue;
-      if (lower === 'srcset' || lower === 'imagesrcset') attrs[name] = rewriteSrcset(value, baseUrl, prefix);
-      else if (URL_ATTRIBUTES.has(lower)) attrs[name] = proxyUrl(value, baseUrl, prefix);
-      else if (lower === 'style') attrs[name] = rewriteCss(value, baseUrl, prefix);
+      if (URL_ATTRIBUTES.has(lower) || lower === 'srcset' || lower === 'imagesrcset' || lower === 'ping') {
+        attrs[name] = rewriteUrlAttribute(lower, value, baseUrl, prefix);
+      } else if (lower === 'style') {
+        attrs[name] = rewriteCss(value, baseUrl, prefix);
+      }
     }
 
     if (tag === 'meta' && String(attrs['http-equiv'] || '').toLowerCase() === 'refresh' && attrs.content) {
@@ -56,6 +70,15 @@ function walk(node, baseUrl, prefix) {
   }
 }
 
+function collectInlineScripts(node, output = []) {
+  if (!node?.children) return output;
+  for (const child of node.children) {
+    if (String(child.name || '').toLowerCase() === 'script' && !child.attribs?.src) output.push(child);
+    collectInlineScripts(child, output);
+  }
+  return output;
+}
+
 function injectRuntime(document, pageUrl, prefix) {
   if (document.children.some(node => node.type === 'tag' && node.attribs?.['data-flashproxy-runtime'] !== undefined)) return;
   const script = new Element('script', { 'data-flashproxy-runtime': '' }, [new Text(buildRuntime(pageUrl, prefix))]);
@@ -69,19 +92,9 @@ export async function rewriteHtml(html, pageUrl, fpPrefix = '/fp') {
   const document = parseDocument(String(html), { decodeEntities: false });
   walk(document, pageUrl, fpPrefix);
 
-  const scripts = [];
-  const collectScripts = node => {
-    if (!node?.children) return;
-    for (const child of node.children) {
-      if ((child.type === 'script' || child.name === 'script') && !child.attribs?.src) scripts.push(child);
-      collectScripts(child);
-    }
-  };
-  collectScripts(document);
-
-  for (const script of scripts) {
-    const type = String(script.attribs?.type || '').toLowerCase();
-    if (type && !type.includes('javascript') && type !== 'module' && type !== 'text/ecmascript') continue;
+  for (const script of collectInlineScripts(document)) {
+    const type = String(script.attribs?.type || '').split(';')[0].trim().toLowerCase();
+    if (!SCRIPT_TYPES.has(type)) continue;
     const source = script.children?.map(c => c.type === 'text' ? c.data : '').join('') || '';
     if (!source.trim()) continue;
     try {
