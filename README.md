@@ -11,7 +11,7 @@
 [📦 Getting Started](./TUTORIAL.md) 
 
 # What is this?
-This is an attempt to make a working proxy serverless. Lots of effort has been put into this project because a serverless project would require less resources and mean lots of other advantageous outcomes from such an achievment.
+This is an attempt to make a working proxy serverless. Lots of effort has been put into this project because a serverless project would require less resources and mean lots of other advantageous outcomes from such an achievment. Lots of progress has been made on this project specifically, however it'll be very hard to reach the performance and reliability of a proxy made over the years, such as Scramjet or Ultraviolet.
 
 Made with ❤️ by @ItsMeh1
 Made with the help of Kimi K2.6
