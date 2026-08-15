@@ -1,4 +1,5 @@
 const DEFAULT_PREFIX = '/fp';
+const DEFAULT_WS_PREFIX = '/wisp/';
 
 const PASSTHROUGH_SCHEMES = new Set([
   'data:', 'blob:', 'javascript:', 'mailto:', 'tel:', 'sms:', 'about:',
@@ -29,11 +30,9 @@ export function isWebUrl(value) {
 export function normalizeTarget(value, baseUrl) {
   const raw = String(value ?? '').trim();
   if (isPassthroughUrl(raw)) return null;
-
   try {
     const resolved = new URL(raw, baseUrl);
-    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
-    return resolved.href;
+    return isWebUrl(resolved.href) ? resolved.href : null;
   } catch {
     return null;
   }
@@ -42,14 +41,9 @@ export function normalizeTarget(value, baseUrl) {
 export function proxyUrl(value, baseUrl, prefix = DEFAULT_PREFIX) {
   const raw = String(value ?? '').trim();
   if (isPassthroughUrl(raw)) return raw;
-
-  if (raw.startsWith(`${prefix}/http://`) || raw.startsWith(`${prefix}/https://`)) {
-    return raw;
-  }
-
+  if (raw.startsWith(`${prefix}/http://`) || raw.startsWith(`${prefix}/https://`)) return raw;
   const target = normalizeTarget(raw, baseUrl);
-  if (!target) return raw;
-  return `${prefix}/${target}`;
+  return target ? `${prefix}/${target}` : raw;
 }
 
 export function unproxyUrl(value, prefix = DEFAULT_PREFIX) {
@@ -59,10 +53,9 @@ export function unproxyUrl(value, prefix = DEFAULT_PREFIX) {
   return isWebUrl(target) ? target : raw;
 }
 
-export function proxyWebSocketUrl(value, baseUrl, wsPrefix = '/wisp/') {
+export function proxyWebSocketUrl(value, baseUrl, wsPrefix = DEFAULT_WS_PREFIX) {
   const raw = String(value ?? '').trim();
   if (!raw) return raw;
-
   try {
     const resolved = new URL(raw, baseUrl);
     if (resolved.protocol !== 'ws:' && resolved.protocol !== 'wss:') return raw;
@@ -75,12 +68,13 @@ export function proxyWebSocketUrl(value, baseUrl, wsPrefix = '/wisp/') {
 export function getTargetFromProxyPath(pathname, prefix = DEFAULT_PREFIX) {
   if (!pathname.startsWith(`${prefix}/`)) return null;
   const target = pathname.slice(prefix.length + 1);
-  if (!isWebUrl(target)) return null;
-  return target;
+  return isWebUrl(target) ? target : null;
 }
 
 export function isProxyUrl(value, prefix = DEFAULT_PREFIX) {
-  return typeof value === 'string' && (value.startsWith(`${prefix}/http://`) || value.startsWith(`${prefix}/https://`));
+  return typeof value === 'string' && (
+    value.startsWith(`${prefix}/http://`) || value.startsWith(`${prefix}/https://`)
+  );
 }
 
-export { DEFAULT_PREFIX };
+export { DEFAULT_PREFIX, DEFAULT_WS_PREFIX };
