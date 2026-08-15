@@ -1,24 +1,96 @@
-    const injection = new Element('script', { 'data-flashproxy': '' });
-    const injectionText = new Text(`(function(){
-'use strict';
-const __pp='${fpPrefix}';
-const __page='${pageUrl}';
-const __origin='${base.origin}';
-window.__flashproxy_page=__page;
-const __fp$loc=new URL(__page);
-const __fp$locObj={get href(){return __fp$loc.href;},set href(v){window.top.postMessage({__fp_nav:v},'*');},get protocol(){return __fp$loc.protocol;},get host(){return __fp$loc.host;},get hostname(){return __fp$loc.hostname;},get port(){return __fp$loc.port;},get pathname(){return __fp$loc.pathname;},get search(){return __fp$loc.search;},get hash(){return __fp$loc.hash;},get origin(){return __fp$loc.origin;},assign:function(u){window.location=u;},replace:function(u){window.location=u;},reload:function(){location.reload();},toString:function(){return __fp$loc.href;}};
-window.__fp$get=function(obj,prop){if(prop==='location'){if(obj===window||obj===self||obj===globalThis||obj===document||obj===top||obj===parent)return __fp$locObj;}if(obj===__fp$locObj)return __fp$locObj[prop];return obj[prop];};
-window.__fp$set=function(obj,prop,val){if(prop==='location'){if(obj===window||obj===self||obj===globalThis||obj===document||obj===top||obj===parent){window.location=val;return true;}}if(obj===__fp$locObj){__fp$locObj[prop]=val;return true;}obj[prop]=val;return true;};
-window.__fp$eval=function(code){return code;};
-const _f=window.fetch,_x=window.XMLHttpRequest,_w=window.WebSocket,_e=window.EventSource,_W=window.Worker,_o=window.open,_sb=navigator.sendBeacon,_ps=history.pushState,_rs=history.replaceState;
-window.fetch=function(u,o){try{if(typeof u==='string'){if(u.startsWith('http'))u=__pp+'/'+u;else if(u.startsWith('/'))u=__pp+'/'+__origin+u;}else if(u instanceof Request){const r=u.url;u=new Request(r.startsWith('http')?__pp+'/'+r:r.startsWith('/')?__pp+'/'+__origin+r:r,u);}return _f(u,o);}catch(e){return new Promise((res,rej)=>{const x=new _x();x.open(o?.method||'GET',u,true);if(o?.headers)for(const[k,v]of Object.entries(o.headers))x.setRequestHeader(k,v);x.onload=()=>res(new Response(x.response,{status:x.status}));x.onerror=rej;x.send(o?.body||null);});}};
-window.XMLHttpRequest=function(){const x=new _x(),op=x.open;x.open=function(m,u,a,user,pw){if(typeof u==='string'){if(u.startsWith('http'))u=__pp+'/'+u;else if(u.startsWith('/'))u=__pp+'/'+__origin+u;}return op.call(x,m,u,a,user,pw);};return x;};
-window.WebSocket=function(url,p){if(typeof url==='string'&&(url.startsWith('ws://')||url.startsWith('wss://'))){url=(location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/wisp/'+url;}return new _w(url,p);};
-window.EventSource=function(url,o){if(typeof url==='string'){if(url.startsWith('http'))url=__pp+'/'+url;else if(url.startsWith('/'))url=__pp+'/'+__origin+url;}return new _e(url,o);};
-window.Worker=function(url,o){if(typeof url==='string'){if(url.startsWith('http'))url=__pp+'/'+url;else if(url.startsWith('/'))url=__pp+'/'+__origin+url;}return new _W(url,o);};
-window.open=function(url,t,f){if(typeof url==='string'){if(url.startsWith('http'))url=__pp+'/'+url;else if(url.startsWith('/'))url=__pp+'/'+__origin+url;}return _o(url,t,f);};
-navigator.sendBeacon=function(url,d){if(typeof url==='string'){if(url.startsWith('http'))url=__pp+'/'+url;else if(url.startsWith('/'))url=__pp+'/'+__origin+url;}return _sb.call(navigator,url,d);};
-history.pushState=function(s,t,u){if(typeof u==='string'){if(u.startsWith('http'))u=__pp+'/'+u;else if(u.startsWith('/'))u=__pp+'/'+__origin+u;}return _ps.call(history,s,t,u);};
-history.replaceState=function(s,t,u){if(typeof u==='string'){if(u.startsWith('http'))u=__pp+'/'+u;else if(u.startsWith('/'))u=__pp+'/'+__origin+u;}return _rs.call(history,s,t,u);};
-console.log('[FlashProxy] Injected');
-})();`);
+import { parseDocument } from 'htmlparser2';
+import { render } from 'dom-serializer';
+import { Element, Text } from 'domhandler';
+import { proxyUrl } from '../src/url.js';
+import { rewriteCss } from './css.js';
+import { rewriteJs } from './js/index.js';
+import { buildRuntime } from './runtime.js';
+
+const URL_ATTRIBUTES = new Set([
+  'href', 'src', 'action', 'formaction', 'poster', 'background', 'cite', 'data', 'manifest',
+  'longdesc', 'ping', 'profile', 'usemap', 'icon', 'itemid', 'itemprop', 'itemtype'
+]);
+
+function rewriteSrcset(value, baseUrl, prefix) {
+  return String(value).split(',').map(candidate => {
+    const match = candidate.trim().match(/^(\S+)(.*)$/);
+    if (!match) return candidate;
+    return `${proxyUrl(match[1], baseUrl, prefix)}${match[2]}`;
+  }).join(', ');
+}
+
+function rewriteMetaRefresh(value, baseUrl, prefix) {
+  return String(value).replace(/(\burl\s*=\s*)([^;]+)/i, (_, head, target) => `${head}${proxyUrl(target.trim(), baseUrl, prefix)}`);
+}
+
+function walk(node, baseUrl, prefix) {
+  if (!node?.children) return;
+  for (const child of node.children) {
+    if (!child?.children && child.type !== 'tag' && child.type !== 'script' && child.type !== 'style') continue;
+    const attrs = child.attribs || {};
+    const tag = String(child.name || '').toLowerCase();
+
+    for (const [name, value] of Object.entries(attrs)) {
+      const lower = name.toLowerCase();
+      if (value == null) continue;
+      if (lower === 'srcset' || lower === 'imagesrcset') attrs[name] = rewriteSrcset(value, baseUrl, prefix);
+      else if (URL_ATTRIBUTES.has(lower)) attrs[name] = proxyUrl(value, baseUrl, prefix);
+      else if (lower === 'style') attrs[name] = rewriteCss(value, baseUrl, prefix);
+    }
+
+    if (tag === 'meta' && String(attrs['http-equiv'] || '').toLowerCase() === 'refresh' && attrs.content) {
+      attrs.content = rewriteMetaRefresh(attrs.content, baseUrl, prefix);
+    }
+
+    if (tag === 'style') {
+      const css = child.children?.map(c => c.type === 'text' ? c.data : '').join('') || '';
+      if (css) child.children = [new Text(rewriteCss(css, baseUrl, prefix))];
+    }
+
+    if (tag === 'iframe' && attrs.srcdoc) {
+      const embedded = parseDocument(attrs.srcdoc, { decodeEntities: false });
+      walk(embedded, baseUrl, prefix);
+      attrs.srcdoc = render(embedded, { encodeEntities: false });
+    }
+    walk(child, baseUrl, prefix);
+  }
+}
+
+function injectRuntime(document, pageUrl, prefix) {
+  if (document.children.some(node => node.type === 'tag' && node.attribs?.['data-flashproxy-runtime'] !== undefined)) return;
+  const script = new Element('script', { 'data-flashproxy-runtime': '' }, [new Text(buildRuntime(pageUrl, prefix))]);
+  const html = document.children.find(node => node.type === 'tag' && node.name === 'html');
+  const head = html?.children?.find(node => node.type === 'tag' && node.name === 'head');
+  if (head) head.children.push(script);
+  else document.children.push(script);
+}
+
+export async function rewriteHtml(html, pageUrl, fpPrefix = '/fp') {
+  const document = parseDocument(String(html), { decodeEntities: false });
+  walk(document, pageUrl, fpPrefix);
+
+  const scripts = [];
+  const collectScripts = node => {
+    if (!node?.children) return;
+    for (const child of node.children) {
+      if ((child.type === 'script' || child.name === 'script') && !child.attribs?.src) scripts.push(child);
+      collectScripts(child);
+    }
+  };
+  collectScripts(document);
+
+  for (const script of scripts) {
+    const type = String(script.attribs?.type || '').toLowerCase();
+    if (type && !type.includes('javascript') && type !== 'module' && type !== 'text/ecmascript') continue;
+    const source = script.children?.map(c => c.type === 'text' ? c.data : '').join('') || '';
+    if (!source.trim()) continue;
+    try {
+      script.children = [new Text(await rewriteJs(source, pageUrl, fpPrefix))];
+    } catch (error) {
+      console.warn('[FlashProxy] JS rewrite failed:', error.message);
+    }
+  }
+
+  injectRuntime(document, pageUrl, fpPrefix);
+  return render(document, { encodeEntities: false });
+}
