@@ -1,13 +1,15 @@
-# Flash Proxy ⚡
+<div align="center">
+  <img src="./logo.png" alt="Flash Proxy" width="220">
+  <h1>Flash Proxy ⚡</h1>
+  <p>A web proxy and rewriting engine built to make proxied sites behave as normally as possible in a browser.</p>
+</div>
 
-Flash Proxy is an experimental web proxy/rewriting engine designed to make proxied sites behave as normally as possible in a browser.
-
-> **Status:** active development. Flash is not yet a drop-in replacement for Scramjet on every complex site.
+> **Status:** active development. Flash is being built in five major parts; this branch is the Part 2 rebuild.
 
 ## What Flash does
 
 - HTTP/HTTPS proxying through `/fp/<absolute-url>`
-- HTML rewriting with `htmlparser2`
+- Parser-based HTML URL rewriting with `htmlparser2`
 - CSS `url(...)` and `@import` rewriting
 - JavaScript rewriting through the Rust/WASM engine when built
 - Conservative JavaScript fallback when WASM is unavailable
@@ -16,7 +18,7 @@ Flash Proxy is an experimental web proxy/rewriting engine designed to make proxi
 - Redirect rewriting
 - Bare Server and Wisp upgrade support
 - A small browser-facing `fpAPI`
-- Regression tests for the URL/HTML/CSS rewriting layer
+- Regression tests for URL/HTML/CSS rewriting
 
 ## Run it
 
@@ -94,6 +96,14 @@ rewriter/        Rust/WASM JavaScript transformer
 tests/           Regression tests
 server.js        HTTP + Bare + Wisp server
 ```
+
+## Five-part rebuild
+
+1. **Part 1 — Foundation:** separate transport, URL handling, rewriting and runtime layers.
+2. **Part 2 — Resource rewriting:** strengthen URL resolution and HTML/CSS coverage, plus regression tests.
+3. **Part 3 — JavaScript/runtime:** deepen AST transforms and browser API emulation.
+4. **Part 4 — Networking:** harden cookies, redirects, headers, WebSockets, workers and edge cases.
+5. **Part 5 — Compatibility:** integration testing and final fixes against increasingly complex real-world sites.
 
 ## License note
 
