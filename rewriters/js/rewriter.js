@@ -19,15 +19,12 @@ const wasmPromise = (async () => {
 })();
 
 function fallbackRewrite(code, pageUrl, fpPrefix) {
-  const rewriteString = (value) => {
-    if (/^(?:data:|blob:|javascript:|mailto:|tel:|#)/i.test(value)) return value;
-    if (/^(?:https?:\/\/|\/\/|\/|\.\.?\/)/i.test(value)) return proxyUrl(value, pageUrl, fpPrefix);
-    return value;
-  };
-
-  return String(code).replace(/(["'`])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^"'`]*?)\1/g, (full, quote, value) => {
-    const rewritten = rewriteString(value);
-    return rewritten === value ? full : `${quote}${rewritten}${quote}`;
+  const literal = /(^|[^\\w$])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^\s"'`<>)]*)/g;
+  return String(code).replace(literal, (full, before, value) => {
+    const trailing = value.match(/[),.;:!?]+$/)?.[0] || '';
+    const core = trailing ? value.slice(0, -trailing.length) : value;
+    const rewritten = proxyUrl(core, pageUrl, fpPrefix);
+    return before + (rewritten === core ? core : rewritten) + trailing;
   });
 }
 
