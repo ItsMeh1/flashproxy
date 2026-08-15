@@ -1,12 +1,13 @@
 {
   "name": "flashproxy",
-  "version": "1.1.0",
-  "description": "Advanced web interception proxy to evade internet censorship",
+  "version": "1.2.0",
+  "description": "High-performance web interception proxy with browser-side rewriting",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "test": "node --test",
     "rewriter:build": "cd rewriter && bash build.sh"
   },
   "dependencies": {
