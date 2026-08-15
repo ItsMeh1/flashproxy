@@ -3,17 +3,9 @@
  * Works with ANY DOM element. Creates iframe automatically if needed.
  */
 
-import { openDB } from 'idb';
-
-const dbPromise = openDB('flashproxy', 1, {
-    upgrade(db) {
-        db.createObjectStore('history', { keyPath: 'id', autoIncrement: true });
-        db.createObjectStore('bookmarks', { keyPath: 'url' });
-        db.createObjectStore('settings');
-    }
-});
-
 const sessions = new WeakMap();
+const bookmarks = new Map();
+const historyLog = [];
 
 function getSession(target) {
     if (!sessions.has(target)) {
@@ -52,12 +44,12 @@ function resolveInput(input) {
 }
 
 export const fpAPI = {
-    async go(input, target) {
+    go(input, target) {
         const url = resolveInput(input);
         return this._navigate(url, target);
     },
 
-    async goRAW(url, target) {
+    goRAW(url, target) {
         return this._navigate(url, target);
     },
 
@@ -92,19 +84,16 @@ export const fpAPI = {
         return session.index >= 0 ? session.history[session.index] : null;
     },
 
-    async addBookmark(url, title) {
-        const db = await dbPromise;
-        await db.put('bookmarks', { url, title, created: Date.now() });
+    addBookmark(url, title) {
+        bookmarks.set(url, { url, title, created: Date.now() });
     },
 
-    async getBookmarks() {
-        const db = await dbPromise;
-        return db.getAll('bookmarks');
+    getBookmarks() {
+        return Array.from(bookmarks.values());
     },
 
-    async getHistory() {
-        const db = await dbPromise;
-        return db.getAll('history');
+    getHistory() {
+        return [...historyLog];
     },
 
     _navigate(url, target) {
@@ -116,10 +105,11 @@ export const fpAPI = {
         const iframe = getFrame(target);
         iframe.src = '/fp/' + url;
         
-        dbPromise.then(db => db.add('history', { url, timestamp: Date.now() }));
+        historyLog.push({ url, timestamp: Date.now() });
         
         return { url, iframe };
     }
 };
 
+// Expose globally too
 if (typeof window !== 'undefined') window.fpAPI = fpAPI;
