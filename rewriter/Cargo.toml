@@ -1,7 +1,10 @@
 [package]
 name = "flashproxy-rewriter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+publish = false
+license = "MIT"
+description = "Flash Proxy JavaScript URL and browser-environment rewriter"
 
 [lib]
 crate-type = ["cdylib"]
@@ -19,3 +22,4 @@ opt-level = 3
 lto = true
 strip = true
 codegen-units = 1
+panic = "abort"
