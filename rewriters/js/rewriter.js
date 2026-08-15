@@ -14,13 +14,14 @@ const wasmPromise = (async () => {
     wasmReady = typeof wasmRewrite === 'function';
     if (wasmReady) console.log('[FlashProxy] Rust/WASM JS rewriter loaded');
   } catch (error) {
-    console.warn('[FlashProxy] Rust/WASM rewriter unavailable:', error.message);
+    console.warn('[FlashProxy] Rust/WASM JS rewriter unavailable:', error.message);
   }
 })();
 
 function fallbackRewrite(code, pageUrl, fpPrefix) {
-  const literal = /(^|[^\\w$])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^\s"'`<>)]*)/g;
-  return String(code).replace(literal, (full, before, value) => {
+  const source = String(code);
+  const urlPattern = /(^|[^\w$])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^\s"'`<>)]*)/g;
+  return source.replace(urlPattern, (full, before, value) => {
     const trailing = value.match(/[),.;:!?]+$/)?.[0] || '';
     const core = trailing ? value.slice(0, -trailing.length) : value;
     const rewritten = proxyUrl(core, pageUrl, fpPrefix);
@@ -32,9 +33,10 @@ export async function rewriteJs(code, pageUrl, fpPrefix = FP_PREFIX) {
   await wasmPromise;
   if (wasmReady && wasmRewrite) {
     try {
-      return wasmRewrite(code, new URL(pageUrl).origin, fpPrefix);
+      const result = wasmRewrite(String(code), new URL(pageUrl).origin, fpPrefix);
+      return typeof result === 'string' ? result : String(code);
     } catch (error) {
-      console.warn('[FlashProxy] WASM rewrite failed, using fallback:', error.message);
+      console.warn('[FlashProxy] WASM rewrite failed; using fallback:', error.message);
     }
   }
   return fallbackRewrite(code, pageUrl, fpPrefix);
