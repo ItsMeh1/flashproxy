@@ -10,7 +10,6 @@ const URL_ATTRIBUTES = new Set([
   'href', 'src', 'action', 'formaction', 'poster', 'background', 'cite', 'data', 'manifest',
   'longdesc', 'ping', 'profile', 'usemap', 'icon', 'itemid', 'itemprop', 'itemtype'
 ]);
-
 const SCRIPT_TYPES = new Set(['', 'text/javascript', 'application/javascript', 'application/ecmascript', 'text/ecmascript', 'module']);
 
 function rewriteSrcset(value, baseUrl, prefix) {
@@ -52,8 +51,19 @@ function walk(node, baseUrl, prefix) {
       }
     }
 
+    // Integrity hashes describe the original bytes. Rewriting changes those bytes,
+    // so retaining the hash would make the browser reject the transformed resource.
+    if (tag === 'script' || tag === 'link' || tag === 'style') {
+      delete attrs.integrity;
+      delete attrs.crossorigin;
+    }
+
     if (tag === 'meta' && String(attrs['http-equiv'] || '').toLowerCase() === 'refresh' && attrs.content) {
       attrs.content = rewriteMetaRefresh(attrs.content, baseUrl, prefix);
+    }
+
+    if (tag === 'base' && attrs.href) {
+      attrs.href = proxyUrl(attrs.href, baseUrl, prefix);
     }
 
     if (tag === 'style') {
