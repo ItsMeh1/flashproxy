@@ -1,18 +1,27 @@
-name: Flash Proxy tests
+name: Flash Proxy checks
 
 on:
   push:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm install
-      - run: npm test
+      - name: Install dependencies
+        run: npm install
+      - name: Run tests
+        run: npm test
+      - name: Verify package JSON
+        run: node --check server.js && node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json OK')"
