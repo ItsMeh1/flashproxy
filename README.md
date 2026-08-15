@@ -45,7 +45,19 @@ wasm-bindgen --version # Should print 0.2.x
 wasm-opt --version     # Should print version 120+
 ```
 
-## Run
+## Build & Run
+
+```bash
+# 1. Build WASM (one time, or after changing Rust)
+cd rewriter && bash build.sh
+
+# 2. Commit pkg/ so others don't need Rust (optional)
+git add rewriter/pkg/
+git commit -m "Add prebuilt WASM"
+
+# 3. Run
+npm start
+```
 
 ```bash
 npm install
