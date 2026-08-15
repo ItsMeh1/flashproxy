@@ -1,76 +1,101 @@
-<h1 align="center">Flash Proxy Tutorial</h1>
-<div align="center">
-  <img src="logo.png" height="200" />
-</div>
+# Flash Proxy tutorial
 
-<div align="center">
-  <img src="https://img.shields.io/github/issues/ItsMeh1/flashproxy?style=flat&color=orange" />
-  <img src="https://img.shields.io/github/stars/ItsMeh1/flashproxy?style=flat&color=orange" />
-</div>
+## 1. Install
 
-<div align="center">
-  [Back to README] (./README.md)
-</div>
-
-A Scramjet-like web interception proxy built on **Fastify** with the exact same dependency stack.
-
-
-## Quick Start & Usage
+Flash Proxy needs Node.js 18+.
 
 ```bash
 npm install
+```
+
+## 2. Run the tests
+
+```bash
+npm test
+```
+
+These tests cover the URL, CSS and HTML rewriting layer.
+
+## 3. Start Flash
+
+```bash
 npm start
 ```
-Open http://localhost:3000 or whatever port you have setup.
-You can edit & add anything in `/public`.
 
-## API
-The API is hosted at (src/api.js)
-FlashProxy exposes fpAPI which works with any DOM element — not just iframes.
-You can use the API like so:
-```javascript
-fpAPI.go(input, target)
+Open:
+
+```text
+http://localhost:3000
 ```
 
-Smart navigation. Auto-detects URLs vs search queries.
+## 4. Use the proxy directly
 
-| Method | What it does | 1st Variable | 2nd Variable |
-| :--- | :--- | :--- | :--- |
-| `fpAPI.go(input, target)` | Uses the automatic smart-navigate feature to route either to a website or a search. Your site doesn't need any logic for that task. | The query | Where the page will be displayed (iframe) |
-| `fpAPI.goRAW(input, target)` | Navigates to the raw URL. It will not use the automatic smart-navigate system, and will navigate to the given url. | The query | Where the page will be displayed (iframe) |
+A target URL is placed after `/fp/`:
 
-### FlashProxy API Example
+```text
+http://localhost:3000/fp/https://example.com/
+```
 
-```javascript
+Flash fetches the target, rewrites the response when it is HTML/CSS/JavaScript, and returns it through the Flash origin.
+
+## 5. Use the browser API
+
+```js
 import { fpAPI } from '/fp-api.js';
 
-const container = document.getElementById('my-div');
-
-fpAPI.go('youtube.com', container);      // → https://youtube.com
-fpAPI.go('how to code', container);      // → Google search
-fpAPI.go('192.168.1.1', container);      // → https://192.168.1.1
-fpAPI.goRAW('https://example.com', container); // → Directly to example.com
+fpAPI.go('example.com', document.querySelector('#browser-container'));
+fpAPI.goRAW('https://example.com/some/path', document.querySelector('#browser-container'));
 ```
 
-You can also use back, forward, and reload controls.
+`go()` accepts a URL, domain, IP, or search text. `goRAW()` skips that input detection.
 
-```javascript
-fpAPI.back(container);
-fpAPI.forward(container);
-fpAPI.reload(container);
+## 6. Build the Rust rewriter
+
+Flash has an AST-based Rust/WASM JavaScript transformer. Install the Rust/WASM prerequisites, then run:
+
+```bash
+npm run rewriter:build
 ```
 
-To check the current URL, you can do this.
+When the generated module is present, Flash uses it automatically. If it is unavailable, Flash falls back to conservative string URL rewriting instead of failing the entire page.
 
-```javascript
-const url = fpAPI.current(container);
+## 7. What is happening
+
+```text
+browser
+  ↓
+Flash API / iframe
+  ↓
+/fp/<target>
+  ↓
+HTTP fetch
+  ↓
+┌───────────────┬──────────────┬────────────────┐
+│ HTML          │ CSS          │ JavaScript     │
+│ parser        │ URL scanner  │ Rust/WASM AST  │
+└───────────────┴──────────────┴────────────────┘
+  ↓
+rewritten response
+  ↓
+browser runtime
 ```
 
-## Endpoints
-| Path         | Purpose                          |
-| :------------ | :-------------------------------- |
-| `/fp/*`      | Proxy endpoint (was `/proxy`)    |
-| `/bare/`     | Bare server for bare-mux clients |
-| `/wisp/`     | Wisp WebSocket TCP tunnel        |
-| `/sw.js`     | Service Worker                   |
-| `/fp-api.js` | FlashProxy API module            |
+The runtime also intercepts important browser APIs such as `fetch`, XHR, WebSocket, workers, EventSource, history and `window.open`.
+
+## Development
+
+```bash
+npm run dev
+```
+
+After changing the Rust rewriter:
+
+```bash
+npm run rewriter:build
+```
+
+Then run:
+
+```bash
+npm test
+```
