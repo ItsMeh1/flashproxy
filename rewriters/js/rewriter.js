@@ -1,9 +1,8 @@
 import { createRequire } from 'node:module';
-import { proxyUrl } from '../../src/url.js';
+import { proxyUrl, proxyWebSocketUrl } from '../../src/url.js';
 
 const require = createRequire(import.meta.url);
 const FP_PREFIX = '/fp';
-
 let wasmRewrite = null;
 let wasmReady = false;
 
@@ -18,15 +17,31 @@ const wasmPromise = (async () => {
   }
 })();
 
+function stripTrailing(value) {
+  const match = value.match(/[),.;:!?]+$/);
+  if (!match) return [value, ''];
+  return [value.slice(0, -match[0].length), match[0]];
+}
+
 function fallbackRewrite(code, pageUrl, fpPrefix) {
   const source = String(code);
-  const urlPattern = /(^|[^\w$])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^\s"'`<>)]*)/g;
-  return source.replace(urlPattern, (full, before, value) => {
-    const trailing = value.match(/[),.;:!?]+$/)?.[0] || '';
-    const core = trailing ? value.slice(0, -trailing.length) : value;
+  let output = source;
+
+  // Keep the fallback deliberately conservative. It only touches string/template
+  // literals that clearly contain a URL-like token; comments and identifiers are
+  // not rewritten. The AST/WASM rewriter remains the preferred path.
+  output = output.replace(/(["'`])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^"'`\\\r\n]*)\1/g, (full, quote, value) => {
+    const [core, trailing] = stripTrailing(value);
     const rewritten = proxyUrl(core, pageUrl, fpPrefix);
-    return before + (rewritten === core ? core : rewritten) + trailing;
+    return quote + (rewritten === core ? value : rewritten + trailing) + quote;
   });
+
+  output = output.replace(/\b(?:new\s+)?WebSocket\s*\(\s*(["'`])((?:wss?:\/\/|\/)[^"'`]+)\1/g, (full, quote, value) => {
+    const rewritten = proxyWebSocketUrl(value, pageUrl, '/wisp/');
+    return full.replace(value, rewritten);
+  });
+
+  return output;
 }
 
 export async function rewriteJs(code, pageUrl, fpPrefix = FP_PREFIX) {
