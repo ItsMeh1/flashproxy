@@ -34,7 +34,6 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
         return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + WS_PREFIX + url.href;
       } catch { return value; }
     };
-    const toEventSource = value => toProxy(value);
 
     const nativeFetch = window.fetch?.bind(window);
     const NativeRequest = window.Request;
@@ -43,7 +42,6 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
     const NativeEventSource = window.EventSource;
     const NativeWorker = window.Worker;
     const NativeSharedWorker = window.SharedWorker;
-    const NativeImage = window.Image;
     const nativeOpen = window.open?.bind(window);
     const nativeSendBeacon = navigator.sendBeacon?.bind(navigator);
     const nativePushState = history.pushState.bind(history);
@@ -87,7 +85,7 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
     }
 
     if (NativeEventSource) {
-      const WrappedEventSource = function(url, options) { return new NativeEventSource(toEventSource(url), options); };
+      const WrappedEventSource = function(url, options) { return new NativeEventSource(toProxy(url), options); };
       WrappedEventSource.prototype = NativeEventSource.prototype;
       for (const key of ['CONNECTING', 'OPEN', 'CLOSED']) Object.defineProperty(WrappedEventSource, key, { value: NativeEventSource[key] });
       window.EventSource = WrappedEventSource;
@@ -104,17 +102,6 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
         return arguments.length === 2 ? new NativeSharedWorker(proxied, nameOrOptions) : new NativeSharedWorker(proxied, nameOrOptions, options);
       };
       window.SharedWorker.prototype = NativeSharedWorker.prototype;
-    }
-
-    if (NativeImage) {
-      const WrappedImage = function(...args) {
-        const image = args.length ? new NativeImage(...args) : new NativeImage();
-        const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
-        if (descriptor?.set) Object.defineProperty(image, 'src', { configurable: true, enumerable: true, get: descriptor.get?.bind(image), set: value => descriptor.set.call(image, toProxy(value)) });
-        return image;
-      };
-      WrappedImage.prototype = NativeImage.prototype;
-      window.Image = WrappedImage;
     }
 
     if (nativeOpen) window.open = (url, ...args) => nativeOpen(toProxy(url), ...args);
