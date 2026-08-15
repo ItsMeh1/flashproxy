@@ -10,11 +10,11 @@
 
 ---
 
-> 🚧 **Development status:** Flash Proxy is being rebuilt in five major parts. This branch contains the ongoing **Part 4 networking and compatibility work**.
+> 🚧 **Development status:** Flash Proxy is now a **10-part rebuild**. This branch is on **Part 5: compatibility hardening**.
 
 ## ✨ What Flash does
 
-Flash separates the hard parts of browser proxying into layers instead of trying to solve everything with one giant rewriter.
+Flash separates browser compatibility into layers instead of trying to solve everything with one giant rewriter.
 
 - 🌐 HTTP/HTTPS proxying through `/fp/<absolute-url>`
 - 🧩 Parser-based HTML rewriting
@@ -25,7 +25,8 @@ Flash separates the hard parts of browser proxying into layers instead of trying
 - 🍪 Per-browser-session cookie storage
 - ↪️ Redirect rewriting
 - 🔌 Bare Server + Wisp transport support
-- 🧪 Regression tests
+- ⏱️ Bounded upstream requests with configurable timeouts
+- 🧪 Regression tests + CI checks
 - 🖥️ A small browser-facing `fpAPI`
 
 ## 🚀 Quick start
@@ -34,7 +35,7 @@ Flash separates the hard parts of browser proxying into layers instead of trying
 
 - Node.js 18+
 - npm
-- Rust + `wasm-pack` if you want to build the optional WASM JavaScript rewriter
+- Rust + `wasm-bindgen` CLI for the optional WASM JavaScript rewriter
 
 ### Install
 
@@ -68,13 +69,13 @@ npm run dev
 
 ## ⚡ Build the JavaScript rewriter
 
-The high-quality JavaScript transformer lives in `rewriter/src/lib.rs` and uses Oxc's AST machinery.
+The JavaScript transformer lives in `rewriter/src/lib.rs` and uses Oxc's AST machinery.
 
 ```bash
 npm run rewriter:build
 ```
 
-Flash can fall back to conservative URL rewriting when the generated WASM module is unavailable.
+If the generated WASM module is unavailable, Flash falls back to conservative URL rewriting instead of taking down the whole page.
 
 ## 🏗️ Architecture
 
@@ -111,17 +112,23 @@ Flash can fall back to conservative URL rewriting when the generated WASM module
                            Target website
 ```
 
-### Part 4 focus
+## 🧠 Part 5 focus — compatibility hardening
 
-Part 4 is about making the layers cooperate reliably:
+Part 5 is intentionally broad. The goal is to make the pieces behave like **one proxy** rather than a collection of independent experiments.
 
-- request headers are filtered before upstream fetches
-- browser-session cookies are stored and selected by domain/path
-- redirects become Flash URLs
-- rewritten responses no longer advertise stale lengths/encodings
-- binary responses can stream instead of being buffered wholesale
-- WebSocket/Bare/Wisp routing remains separate from normal HTTP proxying
-- HTML rewriting removes integrity metadata that would otherwise reject modified resources
+This pass improves:
+
+- URL normalization and scheme handling
+- browser navigation/history
+- Fetch and `Request` interception
+- XHR, WebSocket, EventSource and Worker interception
+- CSS/HTML/JS regression coverage
+- upstream timeouts
+- service-worker behavior
+- CI validation
+- mobile/responsive browser-shell UI
+- WASM build portability
+- documentation and project tooling
 
 ## 📦 API
 
@@ -139,7 +146,7 @@ fpAPI.reload(container);
 ## 📁 Project layout
 
 ```text
-public/          Demo UI
+public/          Demo browser UI
 src/             Browser API, URL helpers and service-worker support
 rewriters/       HTML, CSS, JS and browser-runtime rewriting
 rewriter/        Rust/WASM JavaScript transformer
@@ -148,15 +155,20 @@ server.js        HTTP + Bare + Wisp server
 logo.png         The beautiful Flash logo ⚡
 ```
 
-## 🛠️ Five-part rebuild
+## 🛠️ Ten-part rebuild
 
 | Part | Focus | Status |
 |---|---|---|
 | 1 | Foundation | ✅ |
 | 2 | Resource rewriting | ✅ |
 | 3 | JavaScript + browser runtime | ✅ |
-| 4 | Networking + compatibility hardening | 🔨 **Current** |
-| 5 | Integration testing + final polish | ⏳ |
+| 4 | Networking + compatibility hardening | ✅ |
+| **5** | **Whole-project compatibility pass** | 🔨 **Current** |
+| 6 | Difficult-site compatibility | ⏳ |
+| 7 | Advanced JS/runtime coverage | ⏳ |
+| 8 | Transport + media edge cases | ⏳ |
+| 9 | Performance + memory tuning | ⏳ |
+| 10 | Final integration, testing + polish | ⏳ |
 
 ## 📚 Learn more
 
