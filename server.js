@@ -4,214 +4,239 @@ import { server as wisp } from '@mercuryworkshop/wisp-js/server';
 import createBareServer from '@nebula-services/bare-server-node';
 import { parse, splitCookiesString } from 'set-cookie-parser';
 import { parseDomain } from 'parse-domain';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { rewriteHtml } from './rewriters/html.js';
 import { rewriteCss } from './rewriters/css.js';
 import { rewriteJs } from './rewriters/js/index.js';
+import { getTargetFromProxyPath } from './src/url.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024 });
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 const FP_PREFIX = '/fp';
+const SESSION_COOKIE = 'flash_sid';
+const MAX_BODY = 50 * 1024 * 1024;
 
-// =====================
-// RAW BODY PARSER (catch-all for POST/PUT/PATCH forwarding)
-// =====================
+const app = Fastify({ logger: false, bodyLimit: MAX_BODY });
 app.removeAllContentTypeParsers();
-app.addContentTypeParser('*', { parseAs: 'buffer' }, async (request, body) => {
-    return body;
-});
+app.addContentTypeParser('*', { parseAs: 'buffer' }, async (_request, body) => body);
 
-// =====================
-// COOKIE JAR
-// =====================
-const cookieJar = new Map();
+const sessions = new Map();
+const SESSION_TTL = 1000 * 60 * 60 * 24;
+
+function newSession() {
+  return { created: Date.now(), touched: Date.now(), cookies: new Map() };
+}
+
+function getSession(request, reply) {
+  let id = request.cookies?.[SESSION_COOKIE];
+  if (!id || !sessions.has(id)) {
+    id = crypto.randomBytes(18).toString('base64url');
+    sessions.set(id, newSession());
+    reply.header('Set-Cookie', `${SESSION_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax`);
+  }
+  const session = sessions.get(id);
+  session.touched = Date.now();
+  return session;
+}
 
 function normalizeDomain(hostname) {
-    try {
-        const parsed = parseDomain(hostname);
-        if (parsed && parsed.domain) {
-            return [parsed.domain, ...parsed.topLevelDomains].join('.');
-        }
-    } catch {}
-    return hostname.toLowerCase();
+  try {
+    const parsed = parseDomain(hostname);
+    if (parsed?.domain && parsed.topLevelDomains?.length) return [parsed.domain, ...parsed.topLevelDomains].join('.').toLowerCase();
+  } catch {}
+  return hostname.toLowerCase();
 }
 
-function getCookiesForUrl(url) {
-    const hostname = normalizeDomain(new URL(url).hostname);
-    const out = [];
-    for (const [jarDomain, cookies] of cookieJar.entries()) {
-        if (hostname === jarDomain || hostname.endsWith('.' + jarDomain) || jarDomain.endsWith('.' + hostname)) {
-            out.push(...cookies);
-        }
+function cookieDomainMatches(hostname, cookieDomain) {
+  const host = hostname.toLowerCase();
+  const domain = cookieDomain.replace(/^\./, '').toLowerCase();
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+function cookiePathMatches(requestPath, cookiePath = '/') {
+  if (!requestPath.startsWith('/')) requestPath = `/${requestPath}`;
+  if (!cookiePath.startsWith('/')) cookiePath = `/${cookiePath}`;
+  return requestPath === cookiePath || requestPath.startsWith(cookiePath.endsWith('/') ? cookiePath : `${cookiePath}/`);
+}
+
+function storeCookies(session, setCookieHeader, requestUrl) {
+  if (!setCookieHeader) return;
+  const strings = Array.isArray(setCookieHeader) ? setCookieHeader : splitCookiesString(setCookieHeader);
+  for (const cookie of parse(strings)) {
+    const target = new URL(requestUrl);
+    const domain = (cookie.domain || target.hostname).toLowerCase();
+    const key = `${domain}|${cookie.path || '/'}|${cookie.name}`;
+    if (cookie.expires && new Date(cookie.expires).getTime() <= Date.now()) {
+      session.cookies.delete(key);
+      continue;
     }
-    return out.map(c => `${c.name}=${c.value}`).join('; ');
-}
-
-function storeCookies(setCookieHeader, requestUrl) {
-    if (!setCookieHeader) return;
-    const strings = Array.isArray(setCookieHeader) ? setCookieHeader : splitCookiesString(setCookieHeader);
-    const parsed = parse(strings);
-    for (const cookie of parsed) {
-        const domain = cookie.domain ? cookie.domain.toLowerCase() : normalizeDomain(new URL(requestUrl).hostname);
-        if (!cookieJar.has(domain)) cookieJar.set(domain, []);
-        const jar = cookieJar.get(domain);
-        const idx = jar.findIndex(c => c.name === cookie.name);
-        if (idx !== -1) jar.splice(idx, 1);
-        jar.push(cookie);
+    if (cookie.maxAge != null && Number(cookie.maxAge) <= 0) {
+      session.cookies.delete(key);
+      continue;
     }
+    session.cookies.set(key, {
+      name: cookie.name,
+      value: cookie.value,
+      domain,
+      path: cookie.path || '/',
+      secure: Boolean(cookie.secure),
+      expires: cookie.expires ? new Date(cookie.expires).getTime() : null,
+      created: Date.now()
+    });
+  }
 }
 
-// =====================
-// BARE SERVER
-// =====================
+function getCookiesForUrl(session, requestUrl) {
+  const target = new URL(requestUrl);
+  const now = Date.now();
+  const values = [];
+  for (const [key, cookie] of session.cookies) {
+    if (cookie.expires && cookie.expires <= now) {
+      session.cookies.delete(key);
+      continue;
+    }
+    if (cookie.secure && target.protocol !== 'https:') continue;
+    if (!cookieDomainMatches(target.hostname, cookie.domain)) continue;
+    if (!cookiePathMatches(target.pathname, cookie.path)) continue;
+    values.push(cookie);
+  }
+  values.sort((a, b) => b.path.length - a.path.length);
+  return values.map(c => `${c.name}=${c.value}`).join('; ');
+}
+
+function cleanRequestHeaders(input) {
+  const headers = {};
+  const hopByHop = new Set([
+    'host', 'connection', 'content-length', 'transfer-encoding', 'upgrade',
+    'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer'
+  ]);
+  for (const [key, value] of Object.entries(input)) {
+    if (hopByHop.has(key.toLowerCase()) || key.toLowerCase() === 'cookie') continue;
+    headers[key] = value;
+  }
+  // Let undici fetch a plain representation that we can safely rewrite.
+  headers['accept-encoding'] = 'identity';
+  return headers;
+}
+
+function cleanResponseHeaders(headers) {
+  const output = {};
+  const removed = new Set([
+    'content-length', 'content-encoding', 'transfer-encoding', 'connection', 'keep-alive',
+    'set-cookie', 'content-security-policy', 'content-security-policy-report-only',
+    'x-frame-options', 'cross-origin-opener-policy', 'cross-origin-embedder-policy',
+    'cross-origin-resource-policy', 'access-control-allow-origin', 'access-control-allow-credentials',
+    'etag'
+  ]);
+  headers.forEach((value, key) => {
+    if (!removed.has(key.toLowerCase())) output[key] = value;
+  });
+  return output;
+}
+
+function rewriteRedirect(location, targetUrl) {
+  try {
+    const absolute = new URL(location, targetUrl).href;
+    return `${FP_PREFIX}/${absolute}`;
+  } catch {
+    return location;
+  }
+}
+
+function cleanupSessions() {
+  const cutoff = Date.now() - SESSION_TTL;
+  for (const [id, session] of sessions) if (session.touched < cutoff) sessions.delete(id);
+}
+setInterval(cleanupSessions, 10 * 60 * 1000).unref();
+
 let bareServer;
 try {
-    bareServer = createBareServer('/bare/');
-} catch (e) {
-    console.warn('[Bare] Failed to initialize:', e.message);
+  bareServer = createBareServer('/bare/');
+} catch (error) {
+  console.warn('[Bare] initialization failed:', error.message);
 }
 
-// =====================
-// WISP + BARE UPGRADE HANDLER
-// =====================
 app.server.on('upgrade', (req, socket, head) => {
-    if (bareServer && bareServer.shouldRoute(req)) {
-        bareServer.routeUpgrade(req, socket, head);
-    } else if (req.url.startsWith('/wisp/')) {
-        wisp.routeRequest(req, socket, head);
-    }
+  if (bareServer?.shouldRoute(req)) return bareServer.routeUpgrade(req, socket, head);
+  if (req.url?.startsWith('/wisp/')) return wisp.routeRequest(req, socket, head);
+  socket.destroy();
 });
 
-// =====================
-// STATIC FILES
-// =====================
 await app.register(fastifyStatic, {
-    root: path.join(__dirname, 'public'),
-    prefix: '/',
-    wildcard: true,
+  root: path.join(__dirname, 'public'),
+  prefix: '/',
+  wildcard: true
 });
 
-// =====================
-// SW.js & API MODULE (served from src/)
-// =====================
-app.get('/sw.js', async (request, reply) => {
-    return reply.header('Content-Type', 'application/javascript').sendFile('sw.js', path.join(__dirname, 'src'));
-});
+app.get('/sw.js', async (_request, reply) => reply.sendFile('sw.js', path.join(__dirname, 'src')));
+app.get('/fp-api.js', async (_request, reply) => reply.sendFile('api.js', path.join(__dirname, 'src')));
 
-app.get('/fp-api.js', async (request, reply) => {
-    return reply.header('Content-Type', 'application/javascript').sendFile('api.js', path.join(__dirname, 'src'));
-});
-
-// =====================
-// PROXY ENDPOINT (ALL METHODS)
-// =====================
 app.all(`${FP_PREFIX}/*`, async (request, reply) => {
-    const targetUrl = request.params['*'] || '';
-    const fullTarget = targetUrl + (request.url.includes('?') ? '?' + request.url.split('?')[1] : '');
-    const target = new URL(fullTarget);
-    
-    console.log(`[FP ${request.method}]`, fullTarget);
-    
-    try {
-        const headers = {};
-        for (const [key, val] of Object.entries(request.headers)) {
-            if (['host', 'connection', 'content-length'].includes(key.toLowerCase())) continue;
-            headers[key] = val;
-        }
-        
-        const jarCookies = getCookiesForUrl(fullTarget);
-        if (jarCookies) headers['Cookie'] = jarCookies;
-        
-        let body = undefined;
-        if (!['GET', 'HEAD'].includes(request.method) && request.body && request.body.length > 0) {
-            body = request.body;
-        }
-        
-        const response = await fetch(fullTarget, {
-            method: request.method,
-            headers,
-            body,
-            redirect: 'manual',
-        });
+  const rawPath = request.params['*'] || '';
+  const query = request.url.includes('?') ? request.url.slice(request.url.indexOf('?')) : '';
+  const target = getTargetFromProxyPath(`${FP_PREFIX}/${rawPath}`, FP_PREFIX);
+  if (!target) return reply.code(400).type('text/plain').send('Invalid Flash Proxy target');
 
-        const setCookie = response.headers.getSetCookie?.() || response.headers.get('set-cookie');
-        if (setCookie) storeCookies(setCookie, fullTarget);
+  const targetUrl = target + query;
+  const session = getSession(request, reply);
 
-        if ([301, 302, 303, 307, 308].includes(response.status)) {
-            const location = response.headers.get('location');
-            if (location) {
-                let proxyLoc;
-                if (location.startsWith('http')) proxyLoc = `${FP_PREFIX}/${location}`;
-                else if (location.startsWith('/')) proxyLoc = `${FP_PREFIX}/${target.origin}${location}`;
-                else proxyLoc = `${FP_PREFIX}/${new URL(location, target).href}`;
-                return reply.header('Location', proxyLoc).code(response.status).send();
-            }
-        }
+  try {
+    const headers = cleanRequestHeaders(request.headers);
+    const cookies = getCookiesForUrl(session, targetUrl);
+    if (cookies) headers.cookie = cookies;
 
-        const contentType = response.headers.get('content-type') || '';
-        
-        const safeHeaders = {};
-        response.headers.forEach((val, key) => {
-            const lower = key.toLowerCase();
-            if (!['content-security-policy', 'content-security-policy-report-only', 'x-frame-options', 'set-cookie'].includes(lower)) {
-                safeHeaders[key] = val;
-            }
-        });
+    const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body;
+    const upstream = await fetch(targetUrl, {
+      method: request.method,
+      headers,
+      body,
+      redirect: 'manual'
+    });
 
-        let rewritten;
+    const setCookies = upstream.headers.getSetCookie?.() || upstream.headers.get('set-cookie');
+    if (setCookies) storeCookies(session, setCookies, targetUrl);
 
-        if (contentType.includes('text/html')) {
-            const text = await response.text();
-            rewritten = rewriteHtml(text, fullTarget, FP_PREFIX);
-            safeHeaders['Content-Type'] = 'text/html';
-        } 
-        else if (contentType.includes('text/css')) {
-            const text = await response.text();
-            rewritten = rewriteCss(text, fullTarget, FP_PREFIX);
-            safeHeaders['Content-Type'] = 'text/css';
-        } 
-        else if (contentType.includes('javascript') || contentType.includes('ecmascript') || contentType.includes('js')) {
-            const text = await response.text();
-            rewritten = await rewriteJs(text, fullTarget, FP_PREFIX);
-            safeHeaders['Content-Type'] = 'application/javascript';
-        } 
-        else {
-            const buf = await response.arrayBuffer();
-            for (const [k, v] of Object.entries(safeHeaders)) reply.header(k, v);
-            return reply.code(response.status).send(Buffer.from(buf));
-        }
+    const responseHeaders = cleanResponseHeaders(upstream.headers);
 
-        for (const [k, v] of Object.entries(safeHeaders)) reply.header(k, v);
-        return reply.code(response.status).send(rewritten);
-
-    } catch (err) {
-        console.error('[FP ERROR]', err.message);
-        return reply.code(502).send(`Proxy Error: ${err.message}`);
+    if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+      const location = upstream.headers.get('location');
+      if (location) responseHeaders.location = rewriteRedirect(location, targetUrl);
+      for (const [key, value] of Object.entries(responseHeaders)) reply.header(key, value);
+      return reply.code(upstream.status).send();
     }
+
+    const contentType = upstream.headers.get('content-type') || '';
+    for (const [key, value] of Object.entries(responseHeaders)) reply.header(key, value);
+
+    if (contentType.includes('text/html')) {
+      const text = await upstream.text();
+      return reply.code(upstream.status).type('text/html; charset=utf-8').send(await rewriteHtml(text, targetUrl, FP_PREFIX));
+    }
+    if (contentType.includes('text/css')) {
+      const text = await upstream.text();
+      return reply.code(upstream.status).type('text/css; charset=utf-8').send(rewriteCss(text, targetUrl, FP_PREFIX));
+    }
+    if (/javascript|ecmascript/i.test(contentType)) {
+      const text = await upstream.text();
+      return reply.code(upstream.status).type('application/javascript; charset=utf-8').send(await rewriteJs(text, targetUrl, FP_PREFIX));
+    }
+
+    return reply.code(upstream.status).send(Buffer.from(await upstream.arrayBuffer()));
+  } catch (error) {
+    request.log.error(error);
+    return reply.code(502).type('text/plain').send(`Flash Proxy upstream error: ${error.message}`);
+  }
 });
 
-// =====================
-// FALLBACK TO BARE SERVER
-// =====================
 app.setNotFoundHandler((request, reply) => {
-    if (bareServer && bareServer.shouldRoute(request.raw)) {
-        bareServer.routeRequest(request.raw, reply.raw);
-    } else {
-        reply.code(404).send('Not Found');
-    }
+  if (bareServer?.shouldRoute(request.raw)) return bareServer.routeRequest(request.raw, reply.raw);
+  return reply.code(404).type('text/plain').send('Not Found');
 });
 
-// =====================
-// START
-// =====================
-try {
-    await app.listen({ port: PORT, host: '0.0.0.0' });
-    console.log(`FlashProxy running at http://localhost:${PORT}`);
-    console.log(`Bare server at http://localhost:${PORT}/bare/`);
-    console.log(`Wisp server at ws://localhost:${PORT}/wisp/`);
-} catch (err) {
-    console.error(err);
-    process.exit(1);
-}
+await app.listen({ port: PORT, host: '0.0.0.0' });
+console.log(`Flash Proxy listening on http://localhost:${PORT}`);
+console.log(`HTTP proxy: http://localhost:${PORT}${FP_PREFIX}/https://example.com`);
+console.log(`Bare: http://localhost:${PORT}/bare/`);
+console.log(`Wisp: ws://localhost:${PORT}/wisp/`);
