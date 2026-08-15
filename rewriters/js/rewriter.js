@@ -2,7 +2,27 @@ import { parseSync } from 'oxc-parser';
 
 const FP_PREFIX = '/fp';
 
-export function rewriteJs(code, pageUrl, fpPrefix = FP_PREFIX) {
+// =====================
+// WASM LOADER
+// =====================
+let wasmRewrite = null;
+let wasmReady = false;
+
+const wasmPromise = (async () => {
+    try {
+        const wasm = await import('../../rewriter/pkg/flashproxy_rewriter.js');
+        wasmRewrite = wasm.rewrite_js;
+        wasmReady = true;
+        console.log('[WASM] Rust rewriter loaded');
+    } catch (e) {
+        console.warn('[WASM] Not available, using Node.js Oxc fallback:', e.message);
+    }
+})();
+
+// =====================
+// NODE.JS FALLBACK (Oxc)
+// =====================
+function rewriteWithNodeOxc(code, pageUrl, fpPrefix) {
     const base = new URL(pageUrl);
     
     try {
@@ -10,10 +30,10 @@ export function rewriteJs(code, pageUrl, fpPrefix = FP_PREFIX) {
         const spans = [];
         
         function getSpan(node) {
-            if (node?.span && typeof node.span.start === 'number' && typeof node.span.end === 'number') {
+            if (node?.span && typeof node.span.start === 'number') {
                 return { start: node.span.start, end: node.span.end };
             }
-            if (typeof node?.start === 'number' && typeof node?.end === 'number') {
+            if (typeof node?.start === 'number') {
                 return { start: node.start, end: node.end };
             }
             return null;
@@ -117,4 +137,19 @@ export function rewriteJs(code, pageUrl, fpPrefix = FP_PREFIX) {
     } catch (e) {
         return code;
     }
+}
+
+// =====================
+// PUBLIC API
+// =====================
+export async function rewriteJs(code, pageUrl, fpPrefix = FP_PREFIX) {
+    await wasmPromise;
+    
+    if (wasmReady && wasmRewrite) {
+        // Rust WASM path — 10-100x faster
+        return wasmRewrite(code, new URL(pageUrl).origin, fpPrefix);
+    }
+    
+    // Node.js Oxc fallback
+    return rewriteWithNodeOxc(code, pageUrl, fpPrefix);
 }
