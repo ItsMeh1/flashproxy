@@ -48,7 +48,7 @@ window.addEventListener('message', event => {
   const data = event.data;
   if (!data || data.type !== 'flash:navigate' || typeof data.url !== 'string') return;
   try {
-    const result = data.replace ? fpAPI.goRAW(data.url, container) : fpAPI.goRAW(data.url, container);
+    const result = fpAPI.goRAW(data.url, container);
     updateAddress(result.url);
     setStatus(`Loading ${result.url}`);
   } catch (error) {
@@ -56,5 +56,8 @@ window.addEventListener('message', event => {
   }
 });
 
-container.addEventListener('load', () => setStatus('Ready'));
+container.addEventListener('load', event => {
+  if (event.target?.matches?.('iframe[data-fp-frame]')) setStatus('Ready');
+}, true);
+
 navigate('example.com');
