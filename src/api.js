@@ -1,115 +1,123 @@
 /**
- * FlashProxy API
- * Works with ANY DOM element. Creates iframe automatically if needed.
+ * Flash Proxy browser API.
+ * Navigation is kept per target container so multiple embedded browsers can coexist.
  */
+
+import { proxyUrl } from './url.js';
 
 const sessions = new WeakMap();
 const bookmarks = new Map();
 const historyLog = [];
 
 function getSession(target) {
-    if (!sessions.has(target)) {
-        sessions.set(target, { history: [], index: -1 });
-    }
-    return sessions.get(target);
+  if (!target || typeof target !== 'object') throw new TypeError('Flash Proxy target must be a DOM element');
+  if (!sessions.has(target)) sessions.set(target, { history: [], index: -1 });
+  return sessions.get(target);
 }
 
 function getFrame(target) {
-    if (target.tagName === 'IFRAME') return target;
-    
-    let iframe = target.querySelector('iframe[data-fp-frame]');
-    if (!iframe) {
-        iframe = document.createElement('iframe');
-        iframe.setAttribute('data-fp-frame', 'true');
-        iframe.style.cssText = 'width:100%;height:100%;border:none;display:block;';
-        iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads';
-        target.innerHTML = '';
-        target.appendChild(iframe);
-    }
-    return iframe;
+  if (target.tagName === 'IFRAME') return target;
+  let iframe = target.querySelector('iframe[data-fp-frame]');
+  if (!iframe) {
+    iframe = document.createElement('iframe');
+    iframe.setAttribute('data-fp-frame', 'true');
+    iframe.title = 'Flash Proxy browser';
+    iframe.referrerPolicy = 'no-referrer';
+    iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals';
+    iframe.style.cssText = 'width:100%;height:100%;border:0;display:block;';
+    target.replaceChildren(iframe);
+  }
+  return iframe;
 }
 
 function resolveInput(input) {
-    input = (input || '').trim();
-    if (!input) return 'https://example.com';
-    
-    if (/^https?:\/\//i.test(input)) return input;
-    if (input.startsWith('//')) return 'https:' + input;
-    
-    if (/^([a-z0-9][a-z0-9\-]*\.)+[a-z]{2,}/i.test(input) && !input.includes(' ')) return 'https://' + input;
-    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(input) && !input.includes(' ')) return 'https://' + input;
-    if (/^localhost(:\d+)?/i.test(input) && !input.includes(' ')) return 'https://' + input;
-    
-    return 'https://www.google.com/search?q=' + encodeURIComponent(input);
+  const value = String(input || '').trim();
+  if (!value) return 'https://example.com/';
+  if (/^(?:https?|wss?|ftp):\/\//i.test(value)) return value;
+  if (value.startsWith('//')) return `https:${value}`;
+  if (/^(?:localhost(?::\d+)?|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?:[/:?#].*)?$/i.test(value)) return `https://${value}`;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:[/:?#].*)?$/.test(value)) return `https://${value}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+}
+
+function navigateFrame(target, url) {
+  const frame = getFrame(target);
+  frame.src = proxyUrl(url, location.href);
+  return frame;
 }
 
 export const fpAPI = {
-    go(input, target) {
-        const url = resolveInput(input);
-        return this._navigate(url, target);
-    },
+  resolveInput,
 
-    goRAW(url, target) {
-        return this._navigate(url, target);
-    },
+  go(input, target) {
+    return this._navigate(resolveInput(input), target);
+  },
 
-    back(target) {
-        const session = getSession(target);
-        if (session.index > 0) {
-            session.index--;
-            const url = session.history[session.index];
-            getFrame(target).src = '/fp/' + url;
-            return url;
-        }
-        return null;
-    },
+  goRAW(url, target) {
+    const value = String(url || '').trim();
+    if (!/^https?:\/\//i.test(value)) throw new TypeError('goRAW() requires an absolute HTTP(S) URL');
+    return this._navigate(value, target);
+  },
 
-    forward(target) {
-        const session = getSession(target);
-        if (session.index < session.history.length - 1) {
-            session.index++;
-            const url = session.history[session.index];
-            getFrame(target).src = '/fp/' + url;
-            return url;
-        }
-        return null;
-    },
+  back(target) {
+    const session = getSession(target);
+    if (session.index <= 0) return null;
+    session.index--;
+    const url = session.history[session.index];
+    navigateFrame(target, url);
+    return url;
+  },
 
-    reload(target) {
-        getFrame(target).contentWindow.location.reload();
-    },
+  forward(target) {
+    const session = getSession(target);
+    if (session.index >= session.history.length - 1) return null;
+    session.index++;
+    const url = session.history[session.index];
+    navigateFrame(target, url);
+    return url;
+  },
 
-    current(target) {
-        const session = getSession(target);
-        return session.index >= 0 ? session.history[session.index] : null;
-    },
+  reload(target) {
+    const frame = getFrame(target);
+    if (frame.contentWindow) frame.contentWindow.location.reload();
+    else frame.src = frame.src;
+  },
 
-    addBookmark(url, title) {
-        bookmarks.set(url, { url, title, created: Date.now() });
-    },
+  current(target) {
+    const session = getSession(target);
+    return session.index >= 0 ? session.history[session.index] : null;
+  },
 
-    getBookmarks() {
-        return Array.from(bookmarks.values());
-    },
+  addBookmark(url, title = url) {
+    const value = String(url);
+    bookmarks.set(value, { url: value, title: String(title), created: Date.now() });
+  },
 
-    getHistory() {
-        return [...historyLog];
-    },
+  removeBookmark(url) {
+    return bookmarks.delete(String(url));
+  },
 
-    _navigate(url, target) {
-        const session = getSession(target);
-        session.history = session.history.slice(0, session.index + 1);
-        session.history.push(url);
-        session.index++;
-        
-        const iframe = getFrame(target);
-        iframe.src = '/fp/' + url;
-        
-        historyLog.push({ url, timestamp: Date.now() });
-        
-        return { url, iframe };
-    }
+  getBookmarks() {
+    return Array.from(bookmarks.values()).sort((a, b) => b.created - a.created);
+  },
+
+  getHistory() {
+    return historyLog.map(entry => ({ ...entry }));
+  },
+
+  clearHistory() {
+    historyLog.length = 0;
+  },
+
+  _navigate(url, target) {
+    const session = getSession(target);
+    session.history = session.history.slice(0, session.index + 1);
+    session.history.push(url);
+    session.index++;
+    const iframe = navigateFrame(target, url);
+    historyLog.push({ url, timestamp: Date.now() });
+    return { url, iframe };
+  }
 };
 
-// Expose globally too
 if (typeof window !== 'undefined') window.fpAPI = fpAPI;
