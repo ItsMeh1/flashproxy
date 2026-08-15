@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { proxyUrl, proxyWebSocketUrl } from '../../src/url.js';
+import { proxyUrl } from '../../src/url.js';
 
 const require = createRequire(import.meta.url);
 const FP_PREFIX = '/fp';
@@ -25,18 +25,10 @@ function fallbackRewrite(code, pageUrl, fpPrefix) {
     return value;
   };
 
-  let output = String(code);
-  output = output.replace(/(["'`])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^"'`]*?)\1/g, (full, quote, value) => {
+  return String(code).replace(/(["'`])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^"'`]*?)\1/g, (full, quote, value) => {
     const rewritten = rewriteString(value);
     return rewritten === value ? full : `${quote}${rewritten}${quote}`;
   });
-
-  output = output.replace(/new\s+WebSocket\(\s*(["'])(ws:\/\/|wss:\/\/)([^"']+)\1/gi, (full, quote, _scheme, rest) => {
-    const rewritten = proxyWebSocketUrl(`${_scheme}${rest}`, pageUrl, '/wisp/');
-    return full.replace(`${_scheme}${rest}`, rewritten);
-  });
-
-  return output;
 }
 
 export async function rewriteJs(code, pageUrl, fpPrefix = FP_PREFIX) {
