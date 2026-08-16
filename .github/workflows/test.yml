@@ -20,9 +20,13 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install
-      - name: Syntax checks
-        run: node --check server.js && node --check src/url.js && node --check rewriters/html.js && node --check rewriters/css.js && node --check rewriters/runtime.js && node --check rewriters/js/rewriter.js
-      - name: Run tests
-        run: npm test
+      - name: Repository validation
+        run: npm run check
       - name: Verify package JSON
         run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json OK')"
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Rust check
+        run: npm run check:rust
