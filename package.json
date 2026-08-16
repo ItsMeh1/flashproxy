@@ -1,6 +1,6 @@
 {
   "name": "flashproxy",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "High-performance web interception proxy with browser-side rewriting",
   "main": "server.js",
   "type": "module",
@@ -10,6 +10,8 @@
     "dev": "node --watch server.js",
     "test": "node --test",
     "test:watch": "node --test --watch",
+    "check": "node scripts/check-js.mjs && npm test",
+    "check:rust": "cd rewriter && cargo check --target wasm32-unknown-unknown",
     "rewriter:build": "cd rewriter && bash build.sh"
   },
   "dependencies": {
