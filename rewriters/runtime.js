@@ -40,6 +40,11 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
         return localScheme + '//' + location.host + WS_PREFIX + url.href;
       } catch { return value; }
     };
+    const rewriteSrcset = value => String(value).split(',').map(item => {
+      const m = item.trim().match(/^(\\S+)(.*)$/s);
+      return m ? toProxy(m[1]) + m[2] : item;
+    }).join(', ');
+
     const rewriteNode = node => {
       if (!(node instanceof Element)) return;
       const attrs = ['href','src','action','formaction','poster','cite','background','data','manifest','longdesc','usemap'];
@@ -47,14 +52,8 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
         if (node.hasAttribute(name)) node.setAttribute(name, toProxy(node.getAttribute(name)));
       }
       for (const name of ['srcset','imagesrcset']) {
-        if (node.hasAttribute(name)) {
-          node.setAttribute(name, node.getAttribute(name).split(',').map(item => {
-            const m = item.trim().match(/^(\\S+)(.*)$/s);
-            return m ? toProxy(m[1]) + m[2] : item;
-          }).join(', '));
-        }
+        if (node.hasAttribute(name)) node.setAttribute(name, rewriteSrcset(node.getAttribute(name)));
       }
-      if (node.hasAttribute('style')) node.setAttribute('style', node.getAttribute('style'));
     };
 
     const nativeFetch = window.fetch?.bind(window);
@@ -64,12 +63,31 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
     const NativeEventSource = window.EventSource;
     const NativeWorker = window.Worker;
     const NativeSharedWorker = window.SharedWorker;
+    const NativeRTCPeerConnection = window.RTCPeerConnection;
+    const NativeRTCDataChannel = window.RTCDataChannel;
     const nativeOpen = window.open?.bind(window);
     const nativeSendBeacon = navigator.sendBeacon?.bind(navigator);
     const nativePushState = history.pushState.bind(history);
     const nativeReplaceState = history.replaceState.bind(history);
+    const nativeImportScripts = typeof self.importScripts === 'function' ? self.importScripts.bind(self) : null;
+    const nativeServiceWorkerRegister = navigator.serviceWorker?.register?.bind(navigator.serviceWorker);
 
-    window.__flashproxy = { page: PAGE_URL, prefix: FP_PREFIX, wsPrefix: WS_PREFIX };
+    window.__flashproxy = {
+      page: PAGE_URL,
+      prefix: FP_PREFIX,
+      wsPrefix: WS_PREFIX,
+      originalOrigin: pageURL.origin,
+      capabilities: {
+        fetch: !!nativeFetch,
+        xhr: !!NativeXHR,
+        websocket: !!NativeWebSocket,
+        eventSource: !!NativeEventSource,
+        workers: !!NativeWorker,
+        sharedWorkers: !!NativeSharedWorker,
+        webRTC: !!NativeRTCPeerConnection,
+        serviceWorkers: !!nativeServiceWorkerRegister
+      }
+    };
     window.__flashToProxy = toProxy;
     window.__flashToAbsolute = absolute;
     window.__flashProxyWebSocketUrl = toWebSocket;
@@ -125,6 +143,40 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
       window.SharedWorker.prototype = NativeSharedWorker.prototype;
     }
 
+    // Service workers are script resources too. Registering one with the original
+    // URL would bypass Flash entirely, so route the script through /fp/. The scope
+    // is left untouched because scope semantics belong to the target site.
+    if (nativeServiceWorkerRegister) {
+      navigator.serviceWorker.register = function(scriptURL, options) {
+        return nativeServiceWorkerRegister(toProxy(scriptURL), options);
+      };
+    }
+
+    // importScripts() is synchronous but still creates a network request. It is
+    // especially important for worker bundles that dynamically load dependencies.
+    if (nativeImportScripts) {
+      self.importScripts = function(...urls) {
+        return nativeImportScripts(...urls.map(url => toProxy(url)));
+      };
+    }
+
+    // WebRTC is intentionally NOT sent through /fp/ or Wisp. ICE servers use
+    // STUN/TURN protocols and SDP contains transport candidates, not ordinary HTTP
+    // resources. Rewriting those URLs would break ICE negotiation. We preserve the
+    // native RTCPeerConnection semantics and expose the original target origin so
+    // application code can distinguish Flash's transport origin when necessary.
+    if (NativeRTCPeerConnection) {
+      const WrappedRTCPeerConnection = function(configuration, ...rest) {
+        return new NativeRTCPeerConnection(configuration, ...rest);
+      };
+      WrappedRTCPeerConnection.prototype = NativeRTCPeerConnection.prototype;
+      try {
+        Object.setPrototypeOf(WrappedRTCPeerConnection, NativeRTCPeerConnection);
+      } catch {}
+      window.RTCPeerConnection = WrappedRTCPeerConnection;
+    }
+    if (NativeRTCDataChannel) window.RTCDataChannel = NativeRTCDataChannel;
+
     if (nativeOpen) window.open = (url, ...args) => nativeOpen(url == null ? url : toProxy(url), ...args);
     if (nativeSendBeacon) navigator.sendBeacon = (url, data) => nativeSendBeacon(toProxy(url), data);
 
@@ -135,14 +187,18 @@ export function buildRuntime(pageUrl, fpPrefix = '/fp') {
     Element.prototype.setAttribute = function(name, value) {
       const n = String(name).toLowerCase();
       if (['href','src','action','formaction','poster','cite','background','data','manifest','longdesc','usemap'].includes(n)) value = toProxy(value);
-      if (n === 'srcset' || n === 'imagesrcset') {
-        value = String(value).split(',').map(item => {
-          const m = item.trim().match(/^(\\S+)(.*)$/s);
-          return m ? toProxy(m[1]) + m[2] : item;
-        }).join(', ');
-      }
+      if (n === 'srcset' || n === 'imagesrcset') value = rewriteSrcset(value);
       return originalSetAttribute.call(this, name, value);
     };
+
+    const originalSetAttributeNS = Element.prototype.setAttributeNS;
+    if (originalSetAttributeNS) {
+      Element.prototype.setAttributeNS = function(namespace, name, value) {
+        const n = String(name).toLowerCase();
+        if (['href','src','xlink:href'].includes(n)) value = toProxy(value);
+        return originalSetAttributeNS.call(this, namespace, name, value);
+      };
+    }
 
     const observer = new MutationObserver(records => {
       for (const record of records) {
