@@ -43,7 +43,7 @@ test('CSS rewrites url() and @import without touching data/blob/hash URLs', () =
 test('HTML rewrites common URLs, srcset, ping, style, base and meta refresh', async () => {
   const html = '<!doctype html><html><head><base href="/app/"><meta http-equiv="refresh" content="0; url=/next"><style>.x{background:url(./bg.png)}</style></head><body><a href="/next" ping="/analytics https://log.example/ping">next</a><img src="img/a.png" srcset="small.png 1x, /large.png 2x"><form action="/login"><button>go</button></form><iframe srcdoc="<img src=\"/inside.png\">"></iframe></body></html>';
   const out = await rewriteHtml(html, page);
-  assert.match(out, /href="\/fp\/https:\/\/example\.com\/app\/"/);
+  assert.match(out, /href="\/fp\/https:\/\/example\.com\/app\//);
   assert.match(out, /href="\/fp\/https:\/\/example\.com\/next"/);
   assert.match(out, /src="\/fp\/https:\/\/example\.com\/dir\/img\/a\.png"/);
   assert.match(out, /srcset="\/fp\/https:\/\/example\.com\/dir\/small\.png 1x, \/fp\/https:\/\/example\.com\/large\.png 2x"/);
@@ -61,15 +61,16 @@ test('HTML rewrites module and classic inline scripts without touching non-JS sc
   assert.match(out, /https:\/\/example\.com\/no-rewrite/);
 });
 
-test('JavaScript fallback rewrites URL strings and WebSocket literals conservatively', async () => {
-  const out = await rewriteJs('fetch("/api/data"); const x="https://cdn.example/a.js"; const y="data:text/plain,ok"; new WebSocket("wss://chat.example/socket");', page);
+test('JavaScript fallback rewrites URL strings, WebSockets and relative worker resources conservatively', async () => {
+  const out = await rewriteJs('fetch("/api/data"); const x="https://cdn.example/a.js"; const y="data:text/plain,ok"; new WebSocket("wss://chat.example/socket"); new Worker("./worker.js");', page);
   assert.match(out, /\/fp\/https:\/\/example\.com\/api\/data/);
   assert.match(out, /\/fp\/https:\/\/cdn\.example\/a\.js/);
   assert.match(out, /data:text\/plain,ok/);
   assert.match(out, /\/wisp\/wss:\/\/chat\.example\/socket/);
+  assert.match(out, /\/fp\/https:\/\/example\.com\/dir\/worker\.js/);
 });
 
-test('runtime contains the browser interception and mutation layer', () => {
+test('runtime covers browser networking, workers and service-worker registration', () => {
   const runtime = buildRuntime(page);
   assert.match(runtime, /FLASH_RUNTIME_INSTALLED/);
   assert.match(runtime, /window\.fetch/);
@@ -77,7 +78,17 @@ test('runtime contains the browser interception and mutation layer', () => {
   assert.match(runtime, /WebSocket/);
   assert.match(runtime, /EventSource/);
   assert.match(runtime, /Worker/);
+  assert.match(runtime, /SharedWorker/);
+  assert.match(runtime, /serviceWorker\.register/);
+  assert.match(runtime, /importScripts/);
   assert.match(runtime, /MutationObserver/);
-  assert.match(runtime, /srcset/);
-  assert.match(runtime, /pushState/);
+  assert.match(runtime, /setAttributeNS/);
+});
+
+test('runtime explicitly preserves native WebRTC/ICE semantics', () => {
+  const runtime = buildRuntime(page);
+  assert.match(runtime, /RTCPeerConnection/);
+  assert.match(runtime, /STUN\/TURN/);
+  assert.match(runtime, /NOT sent through \/fp\//);
+  assert.match(runtime, /ICE negotiation/);
 });
