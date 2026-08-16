@@ -3,6 +3,7 @@ import { proxyUrl, proxyWebSocketUrl } from '../../src/url.js';
 
 const require = createRequire(import.meta.url);
 const FP_PREFIX = '/fp';
+const WS_PREFIX = '/wisp/';
 let wasmRewrite = null;
 let wasmReady = false;
 
@@ -23,22 +24,27 @@ function stripTrailing(value) {
   return [value.slice(0, -match[0].length), match[0]];
 }
 
+function rewriteString(value, pageUrl, fpPrefix) {
+  const [core, trailing] = stripTrailing(value);
+  if (/^(?:wss?:)/i.test(core)) {
+    const rewritten = proxyWebSocketUrl(core, pageUrl, WS_PREFIX);
+    return rewritten + trailing;
+  }
+  const rewritten = proxyUrl(core, pageUrl, fpPrefix);
+  return rewritten === core ? value : rewritten + trailing;
+}
+
 function fallbackRewrite(code, pageUrl, fpPrefix) {
   const source = String(code);
   let output = source;
 
-  // Keep the fallback deliberately conservative. It only touches string/template
-  // literals that clearly contain a URL-like token; comments and identifiers are
-  // not rewritten. The AST/WASM rewriter remains the preferred path.
-  output = output.replace(/(["'`])((?:https?:\/\/|\/\/|\/|\.\.\/|\.\/)[^"'`\\\r\n]*)\1/g, (full, quote, value) => {
-    const [core, trailing] = stripTrailing(value);
-    const rewritten = proxyUrl(core, pageUrl, fpPrefix);
-    return quote + (rewritten === core ? value : rewritten + trailing) + quote;
-  });
-
-  output = output.replace(/\b(?:new\s+)?WebSocket\s*\(\s*(["'`])((?:wss?:\/\/|\/)[^"'`]+)\1/g, (full, quote, value) => {
-    const rewritten = proxyWebSocketUrl(value, pageUrl, '/wisp/');
-    return full.replace(value, rewritten);
+  // This fallback is intentionally lexical rather than a global regex over all
+  // text. It handles common static resource literals while leaving comments,
+  // identifiers, and arbitrary application strings alone. The AST/WASM path is
+  // still preferred and is responsible for deeper syntax-aware transformations.
+  output = output.replace(/(["'`])((?:https?:\/\/|wss?:\/\/|\/\/|\/|\.\.\/|\.\/)[^"'`\\\r\n]*)\1/g, (full, quote, value) => {
+    const rewritten = rewriteString(value, pageUrl, fpPrefix);
+    return quote + rewritten + quote;
   });
 
   return output;
