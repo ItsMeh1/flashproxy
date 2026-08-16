@@ -1,6 +1,6 @@
 /**
  * Flash Proxy browser API.
- * Navigation is kept per target container so multiple embedded browsers can coexist.
+ * Navigation state is isolated per target container.
  */
 
 import { proxyUrl } from './url.js';
@@ -9,13 +9,21 @@ const sessions = new WeakMap();
 const bookmarks = new Map();
 const historyLog = [];
 
+function assertTarget(target) {
+  if (!target || typeof target !== 'object' || typeof target.querySelector !== 'function') {
+    throw new TypeError('Flash Proxy target must be a DOM element');
+  }
+  return target;
+}
+
 function getSession(target) {
-  if (!target || typeof target !== 'object') throw new TypeError('Flash Proxy target must be a DOM element');
+  assertTarget(target);
   if (!sessions.has(target)) sessions.set(target, { history: [], index: -1 });
   return sessions.get(target);
 }
 
 function getFrame(target) {
+  assertTarget(target);
   if (target.tagName === 'IFRAME') return target;
   let iframe = target.querySelector('iframe[data-fp-frame]');
   if (!iframe) {
@@ -23,6 +31,7 @@ function getFrame(target) {
     iframe.setAttribute('data-fp-frame', 'true');
     iframe.title = 'Flash Proxy browser';
     iframe.referrerPolicy = 'no-referrer';
+    iframe.loading = 'eager';
     iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals';
     iframe.style.cssText = 'width:100%;height:100%;border:0;display:block;';
     target.replaceChildren(iframe);
@@ -31,7 +40,7 @@ function getFrame(target) {
 }
 
 function resolveInput(input) {
-  const value = String(input || '').trim();
+  const value = String(input ?? '').trim();
   if (!value) return 'https://example.com/';
   if (/^(?:https?|wss?|ftp):\/\//i.test(value)) return value;
   if (value.startsWith('//')) return `https:${value}`;
@@ -46,6 +55,12 @@ function navigateFrame(target, url) {
   return frame;
 }
 
+function recordHistory(session, url) {
+  session.history = session.history.slice(0, session.index + 1);
+  session.history.push(url);
+  session.index = session.history.length - 1;
+}
+
 export const fpAPI = {
   resolveInput,
 
@@ -54,7 +69,7 @@ export const fpAPI = {
   },
 
   goRAW(url, target) {
-    const value = String(url || '').trim();
+    const value = String(url ?? '').trim();
     if (!/^https?:\/\//i.test(value)) throw new TypeError('goRAW() requires an absolute HTTP(S) URL');
     return this._navigate(value, target);
   },
@@ -62,8 +77,7 @@ export const fpAPI = {
   back(target) {
     const session = getSession(target);
     if (session.index <= 0) return null;
-    session.index--;
-    const url = session.history[session.index];
+    const url = session.history[--session.index];
     navigateFrame(target, url);
     return url;
   },
@@ -71,16 +85,15 @@ export const fpAPI = {
   forward(target) {
     const session = getSession(target);
     if (session.index >= session.history.length - 1) return null;
-    session.index++;
-    const url = session.history[session.index];
+    const url = session.history[++session.index];
     navigateFrame(target, url);
     return url;
   },
 
   reload(target) {
     const frame = getFrame(target);
-    if (frame.contentWindow) frame.contentWindow.location.reload();
-    else frame.src = frame.src;
+    frame.contentWindow?.location?.reload?.();
+    return frame;
   },
 
   current(target) {
@@ -89,16 +102,18 @@ export const fpAPI = {
   },
 
   addBookmark(url, title = url) {
-    const value = String(url);
-    bookmarks.set(value, { url: value, title: String(title), created: Date.now() });
+    const value = String(url ?? '').trim();
+    if (!/^https?:\/\//i.test(value)) throw new TypeError('Bookmark URL must be HTTP(S)');
+    bookmarks.set(value, { url: value, title: String(title ?? value), created: Date.now() });
+    return true;
   },
 
   removeBookmark(url) {
-    return bookmarks.delete(String(url));
+    return bookmarks.delete(String(url ?? ''));
   },
 
   getBookmarks() {
-    return Array.from(bookmarks.values()).sort((a, b) => b.created - a.created);
+    return Array.from(bookmarks.values()).sort((a, b) => b.created - a.created).map(entry => ({ ...entry }));
   },
 
   getHistory() {
@@ -110,10 +125,9 @@ export const fpAPI = {
   },
 
   _navigate(url, target) {
+    if (!/^https?:\/\//i.test(url)) throw new TypeError('Flash navigation requires an HTTP(S) URL');
     const session = getSession(target);
-    session.history = session.history.slice(0, session.index + 1);
-    session.history.push(url);
-    session.index++;
+    recordHistory(session, url);
     const iframe = navigateFrame(target, url);
     historyLog.push({ url, timestamp: Date.now() });
     return { url, iframe };
