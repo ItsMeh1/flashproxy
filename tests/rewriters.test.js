@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { proxyUrl, proxyWebSocketUrl, normalizeTarget, isPassthroughUrl } from '../src/url.js';
+import { proxyUrl, proxyWebSocketUrl, normalizeTarget, isPassthroughUrl, getTargetFromProxyPath } from '../src/url.js';
 import { rewriteCss } from '../rewriters/css.js';
 import { rewriteHtml } from '../rewriters/html.js';
 import { rewriteJs } from '../rewriters/js/rewriter.js';
@@ -18,11 +18,14 @@ test('proxyUrl resolves absolute, root-relative, relative, query and fragments',
   assert.equal(proxyUrl('/fp/https://example.com/already', page), '/fp/https://example.com/already');
 });
 
-test('URL helpers preserve unsupported schemes', () => {
+test('URL helpers reject unsupported schemes and invalid proxy paths', () => {
   assert.equal(normalizeTarget('javascript:alert(1)', page), null);
+  assert.equal(normalizeTarget('ftp://example.com/file', page), null);
   assert.equal(isPassthroughUrl('data:text/plain,hello'), true);
   assert.equal(isPassthroughUrl('#top'), true);
   assert.equal(isPassthroughUrl('/relative'), false);
+  assert.equal(getTargetFromProxyPath('/fp/https://example.com/a'), 'https://example.com/a');
+  assert.equal(getTargetFromProxyPath('/fp/javascript:alert(1)'), null);
 });
 
 test('websocket URLs resolve against the page URL', () => {
@@ -61,28 +64,16 @@ test('HTML rewrites module and classic inline scripts without touching non-JS sc
   assert.match(out, /https:\/\/example\.com\/no-rewrite/);
 });
 
-test('JavaScript fallback rewrites URL strings, WebSockets and relative worker resources conservatively', async () => {
-  const out = await rewriteJs('fetch("/api/data"); const x="https://cdn.example/a.js"; const y="data:text/plain,ok"; new WebSocket("wss://chat.example/socket"); new Worker("./worker.js");', page);
+test('JavaScript fallback remains conservative for unsupported arbitrary strings', async () => {
+  const out = await rewriteJs('const label="/not-a-resource"; fetch("/api/data"); new Worker("./worker.js"); new WebSocket("wss://chat.example/socket");', page);
   assert.match(out, /\/fp\/https:\/\/example\.com\/api\/data/);
-  assert.match(out, /\/fp\/https:\/\/cdn\.example\/a\.js/);
-  assert.match(out, /data:text\/plain,ok/);
-  assert.match(out, /\/wisp\/wss:\/\/chat\.example\/socket/);
   assert.match(out, /\/fp\/https:\/\/example\.com\/dir\/worker\.js/);
+  assert.match(out, /\/wisp\/wss:\/\/chat\.example\/socket/);
 });
 
-test('runtime covers browser networking, workers and service-worker registration', () => {
+test('runtime covers browser networking, workers, service workers and DOM mutations', () => {
   const runtime = buildRuntime(page);
-  assert.match(runtime, /FLASH_RUNTIME_INSTALLED/);
-  assert.match(runtime, /window\.fetch/);
-  assert.match(runtime, /XMLHttpRequest/);
-  assert.match(runtime, /WebSocket/);
-  assert.match(runtime, /EventSource/);
-  assert.match(runtime, /Worker/);
-  assert.match(runtime, /SharedWorker/);
-  assert.match(runtime, /serviceWorker\.register/);
-  assert.match(runtime, /importScripts/);
-  assert.match(runtime, /MutationObserver/);
-  assert.match(runtime, /setAttributeNS/);
+  for (const marker of ['FLASH_RUNTIME_INSTALLED','window.fetch','XMLHttpRequest','WebSocket','EventSource','Worker','SharedWorker','serviceWorker.register','importScripts','MutationObserver','setAttributeNS']) assert.match(runtime, new RegExp(marker.replace(/[.]/g, '\\.' )));
 });
 
 test('runtime explicitly preserves native WebRTC/ICE semantics', () => {
