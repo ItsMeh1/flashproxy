@@ -1,5 +1,7 @@
 const DEFAULT_PREFIX = '/fp';
 const DEFAULT_WS_PREFIX = '/wisp/';
+const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
+const WS_PROTOCOLS = new Set(['ws:', 'wss:']);
 const PASSTHROUGH_SCHEMES = new Set([
   'data:', 'blob:', 'javascript:', 'mailto:', 'tel:', 'sms:', 'about:',
   'file:', 'chrome:', 'chrome-extension:', 'moz-extension:', 'view-source:'
@@ -19,12 +21,8 @@ export function isPassthroughUrl(value) {
 
 export function isWebUrl(value) {
   if (!value) return false;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
+  try { return HTTP_PROTOCOLS.has(new URL(value).protocol); }
+  catch { return false; }
 }
 
 export function normalizeTarget(value, baseUrl) {
@@ -32,8 +30,7 @@ export function normalizeTarget(value, baseUrl) {
   if (isPassthroughUrl(raw)) return null;
   try {
     const resolved = new URL(raw, baseUrl);
-    if (!['http:', 'https:'].includes(resolved.protocol)) return null;
-    return resolved.href;
+    return HTTP_PROTOCOLS.has(resolved.protocol) ? resolved.href : null;
   } catch {
     return null;
   }
@@ -42,7 +39,7 @@ export function normalizeTarget(value, baseUrl) {
 export function proxyUrl(value, baseUrl, prefix = DEFAULT_PREFIX) {
   const raw = trimValue(value);
   if (isPassthroughUrl(raw)) return raw;
-  if (raw.startsWith(`${prefix}/http://`) || raw.startsWith(`${prefix}/https://`)) return raw;
+  if (isProxyUrl(raw, prefix)) return raw;
   const target = normalizeTarget(raw, baseUrl);
   return target ? `${prefix}/${target}` : raw;
 }
@@ -56,11 +53,10 @@ export function unproxyUrl(value, prefix = DEFAULT_PREFIX) {
 
 export function proxyWebSocketUrl(value, baseUrl, wsPrefix = DEFAULT_WS_PREFIX) {
   const raw = trimValue(value);
-  if (!raw) return raw;
+  if (!raw || isPassthroughUrl(raw)) return raw;
   try {
     const resolved = new URL(raw, baseUrl);
-    if (resolved.protocol !== 'ws:' && resolved.protocol !== 'wss:') return raw;
-    return `${wsPrefix}${resolved.href}`;
+    return WS_PROTOCOLS.has(resolved.protocol) ? `${wsPrefix}${resolved.href}` : raw;
   } catch {
     return raw;
   }
