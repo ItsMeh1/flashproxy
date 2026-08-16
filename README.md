@@ -10,11 +10,9 @@
 
 ---
 
-> 🚧 **Development status:** Flash Proxy is now a **10-part rebuild**. This branch is on **Part 5: compatibility hardening**.
+> 🚧 **Development status:** Flash Proxy is a **10-part rebuild**. Parts 7 and 8 now cover advanced browser APIs plus transport/media compatibility.
 
 ## ✨ What Flash does
-
-Flash separates browser compatibility into layers instead of trying to solve everything with one giant rewriter.
 
 - 🌐 HTTP/HTTPS proxying through `/fp/<absolute-url>`
 - 🧩 Parser-based HTML rewriting
@@ -22,12 +20,14 @@ Flash separates browser compatibility into layers instead of trying to solve eve
 - ⚡ AST-based JavaScript rewriting through Rust/WASM
 - 🛟 Conservative JavaScript fallback
 - 🧠 Browser runtime interception for Fetch, XHR, WebSocket, EventSource, Workers and navigation APIs
+- 🧰 Service-worker script and `importScripts()` interception
+- 📡 WebRTC-aware compatibility layer that preserves native ICE/STUN/TURN behavior
 - 🍪 Per-browser-session cookie storage
 - ↪️ Redirect rewriting
 - 🔌 Bare Server + Wisp transport support
 - ⏱️ Bounded upstream requests with configurable timeouts
 - 🧪 Regression tests + CI checks
-- 🖥️ A small browser-facing `fpAPI`
+- 🖥️ A browser-facing `fpAPI`
 
 ## 🚀 Quick start
 
@@ -69,66 +69,94 @@ npm run dev
 
 ## ⚡ Build the JavaScript rewriter
 
-The JavaScript transformer lives in `rewriter/src/lib.rs` and uses Oxc's AST machinery.
-
 ```bash
 npm run rewriter:build
 ```
 
-If the generated WASM module is unavailable, Flash falls back to conservative URL rewriting instead of taking down the whole page.
+The high-quality JavaScript transformer lives in `rewriter/src/lib.rs` and uses Oxc's AST machinery. Flash uses it when the generated WASM module is available and falls back conservatively when it is not.
 
 ## 🏗️ Architecture
 
 ```text
-                         ┌──────────────────┐
-                         │   Flash Browser   │
-                         │   UI + fpAPI      │
-                         └────────┬─────────┘
-                                  │
-                                  ▼
-                         ┌──────────────────┐
-                         │ Flash Runtime     │
-                         │ fetch / XHR / WS │
-                         │ workers / nav    │
-                         └────────┬─────────┘
-                                  │
-                                  ▼
-                         ┌──────────────────┐
-                         │   /fp/<target>   │
-                         └────────┬─────────┘
-                                  │
-              ┌───────────────────┼───────────────────┐
-              ▼                   ▼                   ▼
-         HTTP transport      Response rewriting   WS transport
-              │                   │                   │
-              │          ┌────────┼────────┐          │
-              │          ▼        ▼        ▼          │
-              │        HTML      CSS       JS        │
-              │        parser   scanner   Rust/WASM  │
-              │          └────────┼────────┘          │
-              │                   │                   │
-              └───────────────────┼───────────────────┘
-                                  ▼
-                           Target website
+Browser
+   │
+   ▼
+Flash Runtime ──────── WebRTC / ICE kept native
+   │
+   ├── Fetch / XHR
+   ├── WebSocket / EventSource
+   ├── Worker / SharedWorker
+   ├── ServiceWorker registration
+   ├── importScripts()
+   └── DOM / navigation APIs
+   │
+   ▼
+/fp/<target>
+   │
+   ├── HTTP transport ── HTML / CSS / JS rewriting
+   │
+   └── Binary/media streaming
+   │
+   ├── /bare/  ───────── Bare transport
+   └── /wisp/  ───────── WebSocket transport
 ```
 
-## 🧠 Part 5 focus — compatibility hardening
+## 📡 WebRTC: an important distinction
 
-Part 5 is intentionally broad. The goal is to make the pieces behave like **one proxy** rather than a collection of independent experiments.
+Flash can rewrite **the JavaScript that creates WebRTC connections**, but it should not blindly rewrite the actual WebRTC transport endpoints.
 
-This pass improves:
+For example:
 
-- URL normalization and scheme handling
-- browser navigation/history
-- Fetch and `Request` interception
-- XHR, WebSocket, EventSource and Worker interception
-- CSS/HTML/JS regression coverage
-- upstream timeouts
-- service-worker behavior
-- CI validation
-- mobile/responsive browser-shell UI
-- WASM build portability
-- documentation and project tooling
+```js
+const pc = new RTCPeerConnection({
+  iceServers: [{ urls: 'stun:stun.example.com:3478' }]
+});
+```
+
+That STUN URL is **not an HTTP resource**. It participates in ICE negotiation. Turning it into `/fp/https://...` would break the protocol.
+
+Flash therefore preserves native `RTCPeerConnection` / ICE / STUN / TURN semantics. This is intentional, not a missing feature.
+
+## 🧠 Parts 7 + 8
+
+### Part 7 — Advanced JavaScript + runtime
+
+The runtime now covers more browser-created network entry points:
+
+- Fetch + `Request`
+- XHR
+- WebSocket
+- EventSource
+- Worker
+- SharedWorker
+- `navigator.serviceWorker.register()`
+- worker `importScripts()`
+- `window.open()`
+- `sendBeacon()`
+- History navigation
+- dynamic DOM attributes
+- SVG `setAttributeNS()` URLs
+- WebRTC constructor compatibility
+
+The AST layer continues to handle static imports, exports, URL literals, worker/event-source/websocket construction and nested JavaScript where supported.
+
+### Part 8 — Transport + media edge cases
+
+Flash's transport rule is deliberately protocol-aware:
+
+| Traffic | Flash behavior |
+|---|---|
+| HTML | Parse + rewrite |
+| CSS | Rewrite URLs |
+| JavaScript | AST/WASM + conservative fallback |
+| Images/fonts/media | Stream |
+| HTTP redirects | Rewrite to Flash URLs |
+| WebSocket | Wisp transport |
+| Bare-compatible traffic | Bare server |
+| STUN/TURN/ICE | Keep native |
+| WebRTC media | Keep native |
+
+The goal is not to force every protocol through HTTP. The goal is to make every protocol behave correctly.
 
 ## 📦 API
 
@@ -136,7 +164,7 @@ This pass improves:
 import { fpAPI } from '/fp-api.js';
 
 fpAPI.go('example.com', container);
-fpAPI.go('cats', container); // search
+fpAPI.go('cats', container);
 fpAPI.goRAW('https://example.com/path', container);
 fpAPI.back(container);
 fpAPI.forward(container);
@@ -163,17 +191,11 @@ logo.png         The beautiful Flash logo ⚡
 | 2 | Resource rewriting | ✅ |
 | 3 | JavaScript + browser runtime | ✅ |
 | 4 | Networking + compatibility hardening | ✅ |
-| **5** | **Whole-project compatibility pass** | 🔨 **Current** |
-| 6 | Difficult-site compatibility | ⏳ |
-| 7 | Advanced JS/runtime coverage | ⏳ |
-| 8 | Transport + media edge cases | ⏳ |
+| 5 | Whole-project compatibility | ✅ |
+| 6 | Difficult-site compatibility | ✅ |
+| **7 + 8** | **Advanced runtime + transport/media compatibility** | 🔨 **Current** |
 | 9 | Performance + memory tuning | ⏳ |
 | 10 | Final integration, testing + polish | ⏳ |
-
-## 📚 Learn more
-
-- **[Tutorial](./TUTORIAL.md)** — install Flash and understand the request/rewriting flow.
-- **[Package configuration](./package.json)** — scripts and dependencies.
 
 ## ⚖️ License
 
