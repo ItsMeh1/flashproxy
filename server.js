@@ -28,6 +28,9 @@ const RESPONSE_STRIPPED = new Set([
   'access-control-allow-origin', 'access-control-allow-credentials'
 ]);
 
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error('PORT must be an integer between 1 and 65535');
+if (!Number.isFinite(UPSTREAM_TIMEOUT) || UPSTREAM_TIMEOUT < 1000) throw new Error('FLASH_UPSTREAM_TIMEOUT must be at least 1000ms');
+
 const app = Fastify({ logger: false, bodyLimit: MAX_BODY });
 app.removeAllContentTypeParsers();
 app.addContentTypeParser('*', { parseAs: 'buffer' }, async (_request, body) => body);
@@ -109,8 +112,10 @@ function cleanResponseHeaders(headers) {
   return output;
 }
 function rewriteRedirect(location, targetUrl) {
-  try { return `${FP_PREFIX}/${new URL(location, targetUrl).href}`; }
-  catch { return location; }
+  try {
+    const resolved = new URL(location, targetUrl);
+    return `${FP_PREFIX}/${resolved.href}`;
+  } catch { return location; }
 }
 function cleanupSessions() {
   const cutoff = Date.now() - SESSION_TTL;
@@ -134,15 +139,18 @@ app.get('/fp-api.js', async (_request, reply) => reply.sendFile('api.js', path.j
 
 app.all(`${FP_PREFIX}/*`, async (request, reply) => {
   const rawPath = request.params['*'] || '';
-  const query = request.url.includes('?') ? request.url.slice(request.url.indexOf('?')) : '';
   const target = getTargetFromProxyPath(`${FP_PREFIX}/${rawPath}`, FP_PREFIX);
   if (!target) return reply.code(400).type('text/plain').send('Invalid Flash Proxy target');
-  const targetUrl = target + query;
   const session = getSession(request, reply);
+  const targetUrl = new URL(target);
+  const targetQuery = request.url.includes('?') ? request.url.slice(request.url.indexOf('?')) : '';
+  if (targetQuery && !targetUrl.search) targetUrl.search = targetQuery;
+  else if (targetQuery) targetUrl.search = `${targetUrl.search ? `${targetUrl.search}&` : '?'}${targetQuery.slice(1)}`;
+  const targetHref = targetUrl.href;
 
   try {
     const headers = cleanRequestHeaders(request.headers);
-    const cookies = getCookiesForUrl(session, targetUrl);
+    const cookies = getCookiesForUrl(session, targetHref);
     if (cookies) headers.cookie = cookies;
     const body = !['GET', 'HEAD'].includes(request.method) && request.body instanceof Buffer ? request.body : undefined;
     const controller = new AbortController();
@@ -150,38 +158,34 @@ app.all(`${FP_PREFIX}/*`, async (request, reply) => {
 
     let upstream;
     try {
-      upstream = await fetch(targetUrl, { method: request.method, headers, body, redirect: 'manual', signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
-    }
+      upstream = await fetch(targetHref, { method: request.method, headers, body, redirect: 'manual', signal: controller.signal });
+    } finally { clearTimeout(timer); }
 
     const setCookies = upstream.headers.getSetCookie?.() || upstream.headers.get('set-cookie');
-    if (setCookies) storeCookies(session, setCookies, targetUrl);
+    if (setCookies) storeCookies(session, setCookies, targetHref);
     const responseHeaders = cleanResponseHeaders(upstream.headers);
     const status = upstream.status;
 
     if ([301, 302, 303, 307, 308].includes(status)) {
       const location = upstream.headers.get('location');
-      if (location) responseHeaders.location = rewriteRedirect(location, targetUrl);
+      if (location) responseHeaders.location = rewriteRedirect(location, targetHref);
     }
     for (const [key, value] of Object.entries(responseHeaders)) reply.header(key, value);
 
-    if (request.method === 'HEAD' || [204, 304].includes(status) || [301, 302, 303, 307, 308].includes(status)) {
-      return reply.code(status).send();
-    }
+    if (request.method === 'HEAD' || [204, 304, 301, 302, 303, 307, 308].includes(status)) return reply.code(status).send();
 
     const contentType = upstream.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {
       const text = await upstream.text();
-      return reply.code(status).type('text/html; charset=utf-8').send(await rewriteHtml(text, targetUrl, FP_PREFIX));
+      return reply.code(status).type('text/html; charset=utf-8').send(await rewriteHtml(text, targetHref, FP_PREFIX));
     }
     if (contentType.includes('text/css')) {
       const text = await upstream.text();
-      return reply.code(status).type('text/css; charset=utf-8').send(rewriteCss(text, targetUrl, FP_PREFIX));
+      return reply.code(status).type('text/css; charset=utf-8').send(rewriteCss(text, targetHref, FP_PREFIX));
     }
     if (/javascript|ecmascript/i.test(contentType)) {
       const text = await upstream.text();
-      return reply.code(status).type('application/javascript; charset=utf-8').send(await rewriteJs(text, targetUrl, FP_PREFIX));
+      return reply.code(status).type('application/javascript; charset=utf-8').send(await rewriteJs(text, targetHref, FP_PREFIX));
     }
     if (upstream.body) return reply.code(status).send(Readable.fromWeb(upstream.body));
     return reply.code(status).send();
