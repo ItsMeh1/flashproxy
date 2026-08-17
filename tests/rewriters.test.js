@@ -8,7 +8,7 @@ import { buildRuntime } from '../rewriters/runtime.js';
 
 const page = 'https://example.com/dir/index.html';
 
-test('proxyUrl resolves absolute, root-relative, relative, query and fragments', () => {
+test('proxyUrl resolves URL forms without duplicating query strings', () => {
   assert.equal(proxyUrl('https://cdn.example/a.js', page), '/fp/https://cdn.example/a.js');
   assert.equal(proxyUrl('/img/logo.png', page), '/fp/https://example.com/img/logo.png');
   assert.equal(proxyUrl('../app.js', page), '/fp/https://example.com/app.js');
@@ -43,10 +43,17 @@ test('CSS rewrites url() and @import without touching data/blob/hash URLs', () =
   assert.match(out, /url\(#paint\)/);
 });
 
-test('HTML rewrites common URLs, srcset, ping, style, base and meta refresh', async () => {
-  const html = '<!doctype html><html><head><base href="/app/"><meta http-equiv="refresh" content="0; url=/next"><style>.x{background:url(./bg.png)}</style></head><body><a href="/next" ping="/analytics https://log.example/ping">next</a><img src="img/a.png" srcset="small.png 1x, /large.png 2x"><form action="/login"><button>go</button></form><iframe srcdoc="<img src=\"/inside.png\">"></iframe></body></html>';
+test('HTML respects base href for resources below it', async () => {
+  const html = '<html><head><base href="/app/"><link rel="stylesheet" href="css/site.css"></head><body><img src="img/logo.png"></body></html>';
   const out = await rewriteHtml(html, page);
   assert.match(out, /href="\/fp\/https:\/\/example\.com\/app\//);
+  assert.match(out, /href="\/fp\/https:\/\/example\.com\/app\/css\/site\.css"/);
+  assert.match(out, /src="\/fp\/https:\/\/example\.com\/app\/img\/logo\.png"/);
+});
+
+test('HTML rewrites common URLs, srcset, ping, style, and meta refresh', async () => {
+  const html = '<!doctype html><html><head><meta http-equiv="refresh" content="0; url=/next"><style>.x{background:url(./bg.png)}</style></head><body><a href="/next" ping="/analytics https://log.example/ping">next</a><img src="img/a.png" srcset="small.png 1x, /large.png 2x"><form action="/login"><button>go</button></form><iframe srcdoc="<img src=\"/inside.png\">"></iframe></body></html>';
+  const out = await rewriteHtml(html, page);
   assert.match(out, /href="\/fp\/https:\/\/example\.com\/next"/);
   assert.match(out, /src="\/fp\/https:\/\/example\.com\/dir\/img\/a\.png"/);
   assert.match(out, /srcset="\/fp\/https:\/\/example\.com\/dir\/small\.png 1x, \/fp\/https:\/\/example\.com\/large\.png 2x"/);
@@ -56,7 +63,7 @@ test('HTML rewrites common URLs, srcset, ping, style, base and meta refresh', as
   assert.doesNotMatch(out, /integrity=/i);
 });
 
-test('HTML rewrites module and classic inline scripts without touching non-JS script types', async () => {
+test('HTML rewrites module and classic inline scripts without touching data scripts', async () => {
   const html = '<html><head><script>fetch("/api/data")</script><script type="module">import "./module.js"</script><script type="application/ld+json">{"url":"https://example.com/no-rewrite"}</script></head></html>';
   const out = await rewriteHtml(html, page);
   assert.match(out, /\/fp\/https:\/\/example\.com\/api\/data/);
@@ -64,8 +71,9 @@ test('HTML rewrites module and classic inline scripts without touching non-JS sc
   assert.match(out, /https:\/\/example\.com\/no-rewrite/);
 });
 
-test('JavaScript fallback remains conservative for unsupported arbitrary strings', async () => {
+test('JavaScript fallback is conservative and rewrites known networking literals', async () => {
   const out = await rewriteJs('const label="/not-a-resource"; fetch("/api/data"); new Worker("./worker.js"); new WebSocket("wss://chat.example/socket");', page);
+  assert.match(out, /const label="\/not-a-resource"/);
   assert.match(out, /\/fp\/https:\/\/example\.com\/api\/data/);
   assert.match(out, /\/fp\/https:\/\/example\.com\/dir\/worker\.js/);
   assert.match(out, /\/wisp\/wss:\/\/chat\.example\/socket/);
@@ -76,7 +84,7 @@ test('runtime covers browser networking, workers, service workers and DOM mutati
   for (const marker of ['FLASH_RUNTIME_INSTALLED','window.fetch','XMLHttpRequest','WebSocket','EventSource','Worker','SharedWorker','serviceWorker.register','importScripts','MutationObserver','setAttributeNS']) assert.match(runtime, new RegExp(marker.replace(/[.]/g, '\\.' )));
 });
 
-test('runtime explicitly preserves native WebRTC/ICE semantics', () => {
+test('runtime explicitly preserves native WebRTC and ICE semantics', () => {
   const runtime = buildRuntime(page);
   assert.match(runtime, /RTCPeerConnection/);
   assert.match(runtime, /STUN\/TURN/);
