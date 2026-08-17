@@ -7,59 +7,69 @@ const WS_PREFIX: &str = "/wisp/";
 
 fn passthrough(value: &str) -> bool {
     let value = value.trim();
+    let lower = value.to_ascii_lowercase();
     value.is_empty()
         || value.starts_with('#')
-        || value.starts_with("data:")
-        || value.starts_with("blob:")
-        || value.starts_with("javascript:")
-        || value.starts_with("mailto:")
-        || value.starts_with("tel:")
-        || value.starts_with("sms:")
-        || value.starts_with("about:")
-        || value.starts_with("file:")
-        || value.starts_with("chrome:")
-        || value.starts_with("chrome-extension:")
-        || value.starts_with("moz-extension:")
-        || value.starts_with("view-source:")
+        || lower.starts_with("data:")
+        || lower.starts_with("blob:")
+        || lower.starts_with("javascript:")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:")
+        || lower.starts_with("sms:")
+        || lower.starts_with("about:")
+        || lower.starts_with("file:")
+        || lower.starts_with("chrome:")
+        || lower.starts_with("chrome-extension:")
+        || lower.starts_with("moz-extension:")
+        || lower.starts_with("view-source:")
 }
 
 fn is_http(value: &str) -> bool {
-    value.starts_with("http://") || value.starts_with("https://")
+    let lower = value.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 fn is_ws(value: &str) -> bool {
-    value.starts_with("ws://") || value.starts_with("wss://")
+    let lower = value.trim().to_ascii_lowercase();
+    lower.starts_with("ws://") || lower.starts_with("wss://")
 }
 
 fn normalize_prefix(prefix: &str) -> &str {
     prefix.trim_end_matches('/')
 }
 
+fn origin_and_path(base: &str) -> Option<(&str, &str)> {
+    let scheme_end = base.find("://")?;
+    let authority_start = scheme_end + 3;
+    let path_offset = base[authority_start..].find('/').map(|i| authority_start + i);
+    match path_offset {
+        Some(offset) => Some((&base[..offset], &base[offset..])),
+        None => Some((base, "/")),
+    }
+}
+
 fn resolve_url(value: &str, base: &str) -> Option<String> {
     if passthrough(value) { return None; }
     let value = value.trim();
     if is_http(value) { return Some(value.to_string()); }
+
+    let (origin, path) = origin_and_path(base.trim())?;
     if value.starts_with("//") {
-        let scheme = if base.starts_with("https:") { "https:" } else { "http:" };
+        let scheme = if base.trim_start().to_ascii_lowercase().starts_with("https:") { "https:" } else { "http:" };
         return Some(format!("{}{}", scheme, value));
     }
-
-    // The WASM entry receives the full document URL. This intentionally keeps
-    // pathname semantics for imports such as ./chunk.js and ../asset.js.
-    let base = base.trim_end_matches('/');
     if value.starts_with('/') {
-        if let Some(origin_end) = base.find("//").and_then(|i| base[i + 2..].find('/').map(|j| i + 2 + j)) {
-            return Some(format!("{}{}", &base[..origin_end], value));
-        }
-        return Some(format!("{}{}", base, value));
+        return Some(format!("{}{}", origin, value));
     }
+    if value.starts_with('?') {
+        let pathname = path.split(['?', '#']).next().unwrap_or("/");
+        return Some(format!("{}{}{}", origin, pathname, value));
+    }
+    if value.starts_with('#') { return None; }
 
-    let origin_end = base.find("//").and_then(|i| base[i + 2..].find('/').map(|j| i + 2 + j));
-    let origin_end = origin_end?;
-    let origin = &base[..origin_end];
-    let path = &base[origin_end..];
-    let directory = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-    let mut parts: Vec<&str> = directory.split('/').filter(|p| !p.is_empty()).collect();
+    let pathname = path.split(['?', '#']).next().unwrap_or("/");
+    let directory = pathname.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let mut parts: Vec<&str> = directory.split('/').filter(|part| !part.is_empty()).collect();
     for part in value.split('/') {
         match part {
             "" | "." => {}
@@ -67,14 +77,18 @@ fn resolve_url(value: &str, base: &str) -> Option<String> {
             other => parts.push(other),
         }
     }
-    Some(format!("{}/{}", origin, parts.join("/")))
+    let resolved_path = format!("/{}/", parts.join("/"));
+    let resolved_path = resolved_path.trim_end_matches('/');
+    Some(format!("{}{}", origin, if resolved_path.is_empty() { "/" } else { resolved_path }))
 }
 
 fn rewrite_value(value: &str, page_url: &str, prefix: &str) -> Option<String> {
-    if passthrough(value) || value.starts_with(prefix) || value.starts_with(WS_PREFIX) { return None; }
-    if is_ws(value) { return Some(format!("{}{}", WS_PREFIX, value)); }
-    if let Some(target) = resolve_url(value, page_url) {
-        return Some(format!("{}/{}", normalize_prefix(prefix), target));
+    let trimmed = value.trim();
+    let prefix = normalize_prefix(prefix);
+    if passthrough(trimmed) || trimmed.starts_with(&format!("{}/", prefix)) || trimmed.starts_with(WS_PREFIX) { return None; }
+    if is_ws(trimmed) { return Some(format!("{}{}", WS_PREFIX, trimmed)); }
+    if let Some(target) = resolve_url(trimmed, page_url) {
+        return Some(format!("{}/{}", prefix, target));
     }
     None
 }
@@ -86,8 +100,6 @@ fn rewrite_source(code: &str, page_url: &str, prefix: &str) -> String {
     let mut changed = false;
 
     while i < bytes.len() {
-        // JavaScript comments are copied verbatim so URL-looking text in them
-        // can never be rewritten.
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
             let start = i;
             i += 2;
@@ -106,9 +118,6 @@ fn rewrite_source(code: &str, page_url: &str, prefix: &str) -> String {
 
         let quote = bytes[i];
         if quote != b'\'' && quote != b'"' {
-            // Template literals can contain expressions and escaped delimiters;
-            // leave the complete template untouched rather than risk corrupting
-            // embedded JavaScript. Static template URLs are handled by runtime.
             out.push(bytes[i] as char);
             i += 1;
             continue;
@@ -145,10 +154,11 @@ fn rewrite_source(code: &str, page_url: &str, prefix: &str) -> String {
 
 #[wasm_bindgen]
 pub fn rewrite_js(code: String, page_url: String, fp_prefix: String) -> String {
-    // Parse first. The lexical transformer intentionally does not attempt to
-    // become a second JavaScript parser; malformed input is returned unchanged.
+    // `unambiguous` accepts both classic scripts and ESM. The old default source
+    // type treated the input as a script, causing valid `import`/`export` code to
+    // be returned untouched by the WASM path.
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, &code, SourceType::default()).parse();
+    let parsed = Parser::new(&allocator, &code, SourceType::unambiguous()).parse();
     if !parsed.errors.is_empty() { return code; }
     rewrite_source(&code, &page_url, &fp_prefix)
 }
