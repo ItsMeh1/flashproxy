@@ -6,10 +6,7 @@ import { rewriteCss } from './css.js';
 import { rewriteJs } from './js/index.js';
 import { buildRuntime } from './runtime.js';
 
-const URL_ATTRIBUTES = new Set([
-  'href', 'src', 'action', 'formaction', 'poster', 'background', 'cite', 'data', 'manifest',
-  'longdesc', 'profile', 'usemap', 'icon', 'itemid', 'itemprop', 'itemtype'
-]);
+const URL_ATTRIBUTES = new Set(['href', 'src', 'action', 'formaction', 'poster', 'background', 'cite', 'data', 'manifest', 'longdesc', 'profile', 'usemap', 'icon', 'itemid', 'itemprop', 'itemtype']);
 const SCRIPT_TYPES = new Set(['', 'text/javascript', 'application/javascript', 'application/ecmascript', 'text/ecmascript', 'module']);
 
 function rewriteSrcset(value, baseUrl, prefix) {
@@ -31,37 +28,45 @@ function rewriteUrlAttribute(name, value, baseUrl, prefix) {
   return proxyUrl(value, baseUrl, prefix);
 }
 
+function resolveBase(value, baseUrl) {
+  try { return new URL(value, baseUrl).href; } catch { return baseUrl; }
+}
+
 function walk(node, baseUrl, prefix) {
   if (!node?.children) return;
+  let currentBase = baseUrl;
   for (const child of node.children) {
     if (!child) continue;
     const attrs = child.attribs || {};
     const tag = String(child.name || '').toLowerCase();
+    const originalBase = tag === 'base' && attrs.href ? resolveBase(attrs.href, currentBase) : currentBase;
 
     for (const [name, value] of Object.entries(attrs)) {
       const lower = name.toLowerCase();
       if (value == null) continue;
-      if (URL_ATTRIBUTES.has(lower) || lower === 'srcset' || lower === 'imagesrcset' || lower === 'ping') attrs[name] = rewriteUrlAttribute(lower, value, baseUrl, prefix);
-      else if (lower === 'style') attrs[name] = rewriteCss(value, baseUrl, prefix);
+      if (URL_ATTRIBUTES.has(lower) || lower === 'srcset' || lower === 'imagesrcset' || lower === 'ping') attrs[name] = rewriteUrlAttribute(lower, value, originalBase, prefix);
+      else if (lower === 'style') attrs[name] = rewriteCss(value, originalBase, prefix);
     }
 
     if (tag === 'script' || tag === 'link' || tag === 'style') {
       delete attrs.integrity;
       delete attrs.crossorigin;
     }
-    if (tag === 'meta' && String(attrs['http-equiv'] || '').toLowerCase() === 'refresh' && attrs.content) attrs.content = rewriteMetaRefresh(attrs.content, baseUrl, prefix);
-    if (tag === 'base' && attrs.href) attrs.href = proxyUrl(attrs.href, baseUrl, prefix);
+    if (tag === 'meta' && String(attrs['http-equiv'] || '').toLowerCase() === 'refresh' && attrs.content) attrs.content = rewriteMetaRefresh(attrs.content, originalBase, prefix);
+    if (tag === 'base' && attrs.href) attrs.href = proxyUrl(attrs.href, currentBase, prefix);
 
     if (tag === 'style') {
       const css = child.children?.map(c => c.type === 'text' ? c.data : '').join('') || '';
-      if (css) child.children = [new Text(rewriteCss(css, baseUrl, prefix))];
+      if (css) child.children = [new Text(rewriteCss(css, originalBase, prefix))];
     }
     if (tag === 'iframe' && attrs.srcdoc) {
       const embedded = parseDocument(attrs.srcdoc, { decodeEntities: false });
-      walk(embedded, baseUrl, prefix);
+      walk(embedded, originalBase, prefix);
       attrs.srcdoc = render(embedded, { encodeEntities: false });
     }
-    walk(child, baseUrl, prefix);
+
+    walk(child, originalBase, prefix);
+    if (tag === 'base' && attrs.href) currentBase = originalBase;
   }
 }
 
@@ -87,20 +92,15 @@ function injectRuntime(document, pageUrl, prefix) {
 export async function rewriteHtml(html, pageUrl, fpPrefix = '/fp') {
   const document = parseDocument(String(html), { decodeEntities: false });
   walk(document, pageUrl, fpPrefix);
-
   for (const script of collectInlineScripts(document)) {
     if (script.attribs?.['data-flashproxy-runtime'] !== undefined) continue;
     const type = String(script.attribs?.type || '').split(';')[0].trim().toLowerCase();
     if (!SCRIPT_TYPES.has(type)) continue;
     const source = script.children?.map(c => c.type === 'text' ? c.data : '').join('') || '';
     if (!source.trim()) continue;
-    try {
-      script.children = [new Text(await rewriteJs(source, pageUrl, fpPrefix))];
-    } catch (error) {
-      console.warn('[FlashProxy] JS rewrite failed:', error.message);
-    }
+    try { script.children = [new Text(await rewriteJs(source, pageUrl, fpPrefix))]; }
+    catch (error) { console.warn('[FlashProxy] JS rewrite failed:', error.message); }
   }
-
   injectRuntime(document, pageUrl, fpPrefix);
   return render(document, { encodeEntities: false });
 }
