@@ -11,20 +11,23 @@
 </head>
 <body>
   <header class="chrome">
-    <div class="brand"><img src="/logo.png" alt="" aria-hidden="true"><span>Flash Proxy</span></div>
+    <div class="brand">
+      <img src="/logo.png" alt="Flash Proxy logo" width="24" height="24">
+      <span>Flash Proxy</span>
+    </div>
     <nav class="nav-bar" aria-label="Browser controls">
-      <button id="back" type="button" title="Back" aria-label="Back">←</button>
-      <button id="forward" type="button" title="Forward" aria-label="Forward">→</button>
+      <button id="back" type="button" title="Back" aria-label="Back" disabled>←</button>
+      <button id="forward" type="button" title="Forward" aria-label="Forward" disabled>→</button>
       <button id="reload" type="button" title="Reload" aria-label="Reload">↻</button>
-      <form id="address-form" class="address-form">
-        <label class="sr-only" for="address-bar">Address</label>
-        <input id="address-bar" autocomplete="off" spellcheck="false" type="text" placeholder="Enter a URL or search…" value="example.com">
+      <form id="address-form" class="address-form" role="search">
+        <label class="sr-only" for="address-bar">Address or search</label>
+        <input id="address-bar" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" type="text" placeholder="Enter a URL or search…" value="example.com" aria-describedby="status">
         <button id="go" type="submit">Go</button>
       </form>
     </nav>
   </header>
-  <main id="browser-container" aria-label="Flash Proxy browser"></main>
-  <footer class="status" id="status" role="status" aria-live="polite">Ready</footer>
+  <main id="browser-container" aria-label="Flash Proxy browser content"></main>
+  <footer class="status" id="status" role="status" aria-live="polite" aria-atomic="true">Ready</footer>
   <script type="module" src="/main.js"></script>
 </body>
 </html>
