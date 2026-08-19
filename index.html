@@ -6,7 +6,7 @@
   <meta name="description" content="Flash Proxy Lite — a static browser-side web proxy toolkit.">
   <meta name="theme-color" content="#090b10">
   <title>Flash Proxy Lite ⚡</title>
-  <style>html,body{margin:0;min-height:100%;background:#090b10}body{overflow:hidden}</style>
+  <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <noscript>Flash Proxy Lite needs JavaScript enabled.</noscript>
@@ -17,8 +17,6 @@
   <script>
     (() => {
       const proxy = new FlashProxyLite({
-        // A static page cannot bypass CORS. Try browser-readable content first,
-        // then use a configured remote CORS endpoint if one is available.
         strategyOrder: ['direct', 'corsproxy'],
         rewriteHtml: true,
         timeout: 15000,
