@@ -1,52 +1,36 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FlashProxy Lite v2.0</title>
-  <meta name="description" content="Serverless client-side web proxy with intelligent fallback.">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { height: 100%; overflow: hidden; background: #0a0a0f; }
-  </style>
-<base target="_blank">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Flash Proxy Lite — a static browser-side web proxy toolkit.">
+  <meta name="theme-color" content="#090b10">
+  <title>Flash Proxy Lite ⚡</title>
+  <style>html,body{margin:0;min-height:100%;background:#090b10}body{overflow:hidden}</style>
 </head>
 <body>
-  <!-- FlashProxy Lite v2.0.0 -->
-  <!-- Load order matters: Core → Strategies → Rewriter → UI -->
-  <script src="./flashproxy-core.js"></script>
-  <script src="./flashproxy-strategies.js"></script>
-  <script src="./flashproxy-rewriter.js"></script>
-  <script src="./flashproxy-ui.js"></script>
+  <noscript>Flash Proxy Lite needs JavaScript enabled.</noscript>
+  <script src="./src/flashproxy-core.js"></script>
+  <script src="./src/flashproxy-strategies.js"></script>
+  <script src="./src/flashproxy-rewriter.js"></script>
+  <script src="./src/flashproxy-ui.js"></script>
   <script>
-    (async function() {
-      'use strict';
-
-      // Initialize the proxy engine
+    (() => {
       const proxy = new FlashProxyLite({
-        strategyOrder: ['direct', 'iframe', 'serviceworker', 'corsproxy'],
+        // A static page cannot bypass CORS. Try browser-readable content first,
+        // then use a configured remote CORS endpoint if one is available.
+        strategyOrder: ['direct', 'corsproxy'],
         rewriteHtml: true,
-        blockScripts: false,
-        stripCookies: true,
         timeout: 15000,
-        debug: false
+        maxRetries: 1,
+        enableServiceWorker: false
       });
-
-      // Wait for initialization (SW registration, etc.)
-      await proxy.init();
-
-      // Mount the UI
-      const ui = new FlashProxyUI(proxy, document.body);
-      ui.mount();
-
-      // Handle URL parameter ?url=...
-      const params = new URLSearchParams(location.search);
-      const targetUrl = params.get('url');
-      if (targetUrl) {
-        proxy.navigate(targetUrl);
-      }
-
-      console.log('[FlashProxy] System ready. Version:', FlashProxyLite.VERSION);
+      const ui = new FlashProxyUI(proxy, document.body).mount();
+      proxy.init().catch(error => console.error('[Flash Proxy Lite] init failed:', error));
+      const target = new URLSearchParams(location.search).get('url');
+      if (target) proxy.navigate(target).catch(() => {});
+      globalThis.flashProxy = proxy;
+      globalThis.flashProxyUI = ui;
     })();
   </script>
 </body>
