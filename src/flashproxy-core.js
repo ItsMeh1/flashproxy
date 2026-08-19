@@ -1,222 +1,170 @@
 /**
- * FlashProxy Lite v2.0.0 — Core Engine
- * Serverless client-side proxy with tiered fallback strategies.
- * 
- * Usage:
- *   const proxy = new FlashProxyLite({ strategyOrder: ['direct','corsproxy'] });
- *   proxy.addEventListener('load', e => console.log('Loaded:', e.detail));
- *   await proxy.navigate('https://example.com');
+ * Flash Proxy Lite — static browser core.
+ *
+ * Important: a static page cannot bypass CORS by itself. The core therefore
+ * treats direct access and display-only iframes as native browser strategies,
+ * and uses a configured CORS-capable remote endpoint when readable content is
+ * required. No Node/server runtime is required by this file.
  */
-
-(function(global) {
+(function (global) {
   'use strict';
 
-  const VERSION = '2.0.0';
+  const VERSION = '3.0.0';
+  const DEFAULT_PROXIES = [
+    { name: 'corsproxy.io', url: 'https://corsproxy.io/?url={url}', health: null, latency: null },
+    { name: 'AllOrigins', url: 'https://api.allorigins.win/raw?url={url}', health: null, latency: null }
+  ];
 
   const DEFAULTS = {
-    strategyOrder: ['direct', 'iframe', 'serviceworker', 'corsproxy'],
-    fallbackProxies: [
-      { name: 'corsproxy.io', url: 'https://corsproxy.io/?url={url}', health: null, latency: null },
-      { name: 'allorigins.win', url: 'https://api.allorigins.win/raw?url={url}', health: null, latency: null },
-      { name: 'codetabs.com', url: 'https://api.codetabs.com/v1/proxy?quest={url}', health: null, latency: null }
-    ],
+    strategyOrder: ['direct', 'iframe', 'corsproxy'],
+    fallbackProxies: DEFAULT_PROXIES,
     customProxies: [],
     rewriteHtml: true,
     blockScripts: false,
-    stripCookies: true,
     timeout: 15000,
-    maxRetries: 2,
+    maxRetries: 1,
     cacheEnabled: true,
-    userAgent: navigator.userAgent,
-    iframeSandbox: 'allow-same-origin allow-scripts allow-forms allow-popups allow-modals',
-    debug: false
+    debug: false,
+    iframeSandbox: 'allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads'
   };
+
+  function cloneConfig(options) {
+    return {
+      ...DEFAULTS,
+      ...options,
+      strategyOrder: [...(options.strategyOrder || DEFAULTS.strategyOrder)],
+      fallbackProxies: [...(options.fallbackProxies || DEFAULT_PROXIES)].map(p => ({ ...p })),
+      customProxies: [...(options.customProxies || [])].map(p => ({ ...p }))
+    };
+  }
 
   class FlashProxyLite extends EventTarget {
     constructor(options = {}) {
       super();
-      this.config = Object.assign({}, DEFAULTS, options);
+      this.config = cloneConfig(options);
       this.state = {
-        history: [],
-        historyIndex: -1,
-        currentUrl: null,
-        currentStrategy: null,
-        rawContent: null,
-        rewrittenContent: null,
-        isLoading: false,
-        activeIframe: null,
-        cache: new Map(),
-        swRegistration: null,
-        swController: null
+        history: [], historyIndex: -1, currentUrl: null,
+        currentStrategy: null, rawContent: null, rewrittenContent: null,
+        isLoading: false, activeIframe: null, cache: new Map(),
+        swRegistration: null, swController: null
       };
       this.strategies = new Map();
-      this.strategyImpl = null;
       this.rewriter = null;
-      this._log('Core initialized');
     }
 
-    /* ─── Initialization ─── */
     async init() {
-      // Load strategy module if present
-      if (typeof FlashProxyStrategies !== 'undefined') {
-        this.strategyImpl = new FlashProxyStrategies(this);
-        this.config.strategyOrder.forEach(name => {
-          if (this.strategyImpl[name]) {
-            this.strategies.set(name, this.strategyImpl[name].bind(this.strategyImpl));
-          }
-        });
+      if (typeof global.FlashProxyStrategies === 'function') {
+        const impl = new global.FlashProxyStrategies(this);
+        for (const name of this.config.strategyOrder) {
+          if (typeof impl[name] === 'function') this.strategies.set(name, impl[name].bind(impl));
+        }
       }
-      // Load rewriter module if present
-      if (typeof FlashProxyRewriter !== 'undefined') {
-        this.rewriter = new FlashProxyRewriter(this);
-      }
-      // Register Service Worker
-      if ('serviceWorker' in navigator && this.config.strategyOrder.includes('serviceworker')) {
+      if (typeof global.FlashProxyRewriter === 'function') this.rewriter = new global.FlashProxyRewriter(this);
+
+      if ('serviceWorker' in navigator && location.protocol !== 'file:' && this.config.enableServiceWorker) {
         await this._registerSW();
       }
-      this._emit('ready', { version: VERSION });
+      this._emit('ready', { version: VERSION, static: true });
       return this;
     }
 
     async _registerSW() {
       try {
-        const reg = await navigator.serviceWorker.register('./flashproxy-sw.js', { scope: './' });
+        const reg = await navigator.serviceWorker.register('./src/flashproxy-sw.js', { scope: './' });
         this.state.swRegistration = reg;
         await navigator.serviceWorker.ready;
-        this.state.swController = reg.active || navigator.serviceWorker.controller;
-        this._log('Service Worker registered');
-      } catch (e) {
-        this._warn('SW registration failed:', e.message);
+        this.state.swController = navigator.serviceWorker.controller || reg.active || null;
+      } catch (error) {
+        this._warn('Service Worker unavailable:', error.message);
       }
     }
 
-    /* ─── Navigation ─── */
-    async navigate(url, options = {}) {
-      const normalized = this._normalizeUrl(url);
-      if (!normalized) {
-        const err = new Error('Invalid URL: ' + url);
-        this._emit('error', { url, error: err.message, phase: 'normalize' });
-        throw err;
-      }
+    async navigate(input, options = {}) {
+      const url = this._normalizeUrl(input);
+      if (!url) throw this._fail(input, 'Invalid HTTP(S) URL');
 
       this.state.isLoading = true;
-      this.state.currentUrl = normalized;
-      this._emit('navigate', { url: normalized, options });
-
-      const strategies = this.config.strategyOrder;
+      this.state.currentUrl = url;
+      this._emit('navigate', { url, options });
       let lastError = null;
 
-      for (const strategyName of strategies) {
-        if (!this.strategies.has(strategyName)) {
-          this._log(`Strategy "${strategyName}" not available, skipping`);
-          continue;
-        }
-
-        this._emit('strategy-attempt', { strategy: strategyName, url: normalized });
-
-        try {
-          const result = await this._executeWithRetry(strategyName, normalized, options);
-          if (result) {
-            this.state.currentStrategy = strategyName;
-            await this._handleSuccess(result, normalized, options);
+      try {
+        for (const name of this.config.strategyOrder) {
+          const fn = this.strategies.get(name);
+          if (!fn) continue;
+          this._emit('strategy-attempt', { strategy: name, url });
+          try {
+            const result = await this._executeWithRetry(fn, name, url, options);
+            if (!result) continue;
+            this.state.currentStrategy = result.strategy || name;
+            await this._handleSuccess(result, url, options);
             this._emit('load', {
-              url: normalized,
-              strategy: strategyName,
+              url, strategy: this.state.currentStrategy,
               proxy: result.proxy || null,
               contentType: result.contentType || null,
-              size: result.content ? result.content.length : 0
+              size: typeof result.content === 'string' ? result.content.length : 0,
+              displayOnly: result.type === 'iframe'
             });
-            this.state.isLoading = false;
             return result;
+          } catch (error) {
+            lastError = error;
+            this._emit('strategy-fail', { strategy: name, url, error: error.message });
           }
-        } catch (err) {
-          lastError = err;
-          this._emit('strategy-fail', { strategy: strategyName, url: normalized, error: err.message });
-          this._warn(`Strategy "${strategyName}" failed:`, err.message);
         }
+        throw this._fail(url, lastError?.message || 'No usable strategy succeeded');
+      } finally {
+        this.state.isLoading = false;
       }
-
-      this.state.isLoading = false;
-      const finalError = new Error(`All strategies failed for ${normalized}. Last: ${lastError?.message}`);
-      this._emit('error', { url: normalized, error: finalError.message, phase: 'all-strategies' });
-      throw finalError;
     }
 
-    async _executeWithRetry(strategyName, url, options) {
-      const fn = this.strategies.get(strategyName);
-      let lastErr;
-      for (let i = 0; i < this.config.maxRetries; i++) {
-        try {
-          return await fn(url, options);
-        } catch (err) {
-          lastErr = err;
-          if (i < this.config.maxRetries - 1) {
-            this._log(`Retry ${i + 1} for ${strategyName}...`);
-            await this._delay(1000 * (i + 1));
-          }
+    async _executeWithRetry(fn, name, url, options) {
+      let lastError;
+      for (let attempt = 0; attempt < Math.max(1, this.config.maxRetries + 1); attempt++) {
+        try { return await fn(url, options); }
+        catch (error) {
+          lastError = error;
+          if (attempt < this.config.maxRetries) await this._delay(500 * (attempt + 1));
         }
       }
-      throw lastErr;
+      throw lastError || new Error(`${name} failed`);
     }
 
     async _handleSuccess(result, url, options) {
-      // Clean up previous iframe if any
-      if (this.state.activeIframe && this.state.activeIframe.parentNode) {
-        this.state.activeIframe.parentNode.removeChild(this.state.activeIframe);
-      }
-      this.state.activeIframe = null;
+      if (this.state.activeIframe?.parentNode) this.state.activeIframe.remove();
+      this.state.activeIframe = result.type === 'iframe' ? result.iframeElement : null;
+      this.state.rawContent = result.content ?? null;
 
-      // Store raw
-      this.state.rawContent = result.content || null;
-
-      // Rewrite if applicable
       if (result.type === 'text' && this.config.rewriteHtml && this.rewriter && result.content) {
         this.state.rewrittenContent = this.rewriter.rewrite(result.content, url);
       } else {
-        this.state.rewrittenContent = result.content || null;
+        this.state.rewrittenContent = result.content ?? null;
       }
 
-      // Cache
-      if (this.config.cacheEnabled && result.content) {
-        this.state.cache.set(url, { content: result.content, strategy: result.strategy, ts: Date.now() });
+      if (this.config.cacheEnabled && typeof result.content === 'string') {
+        this.state.cache.set(url, { content: result.content, strategy: result.strategy, timestamp: Date.now() });
       }
 
-      // Store iframe reference if strategy returned one
-      if (result.type === 'iframe' && result.iframeElement) {
-        this.state.activeIframe = result.iframeElement;
-      }
-
-      // Update history
       if (options.addHistory !== false) {
-        if (this.state.historyIndex < this.state.history.length - 1) {
-          this.state.history = this.state.history.slice(0, this.state.historyIndex + 1);
-        }
+        this.state.history = this.state.history.slice(0, this.state.historyIndex + 1);
         this.state.history.push(url);
-        this.state.historyIndex++;
+        this.state.historyIndex = this.state.history.length - 1;
       }
     }
 
-    /* ─── History ─── */
     back() {
-      if (this.canGoBack()) {
-        this.state.historyIndex--;
-        return this.navigate(this.state.history[this.state.historyIndex], { addHistory: false });
-      }
-      return Promise.resolve(null);
+      if (!this.canGoBack()) return Promise.resolve(null);
+      const url = this.state.history[--this.state.historyIndex];
+      return this.navigate(url, { addHistory: false });
     }
 
     forward() {
-      if (this.canGoForward()) {
-        this.state.historyIndex++;
-        return this.navigate(this.state.history[this.state.historyIndex], { addHistory: false });
-      }
-      return Promise.resolve(null);
+      if (!this.canGoForward()) return Promise.resolve(null);
+      const url = this.state.history[++this.state.historyIndex];
+      return this.navigate(url, { addHistory: false });
     }
 
     canGoBack() { return this.state.historyIndex > 0; }
-    canGoForward() { return this.state.historyIndex < this.state.history.length - 1; }
-
-    /* ─── Content Access ─── */
+    canGoForward() { return this.state.historyIndex >= 0 && this.state.historyIndex < this.state.history.length - 1; }
     get rawHtml() { return this.state.rawContent; }
     get rewrittenHtml() { return this.state.rewrittenContent; }
     get currentUrl() { return this.state.currentUrl; }
@@ -224,85 +172,73 @@
     get isLoading() { return this.state.isLoading; }
     get history() { return [...this.state.history]; }
 
-    /* ─── Proxy Management ─── */
     addProxy(name, urlTemplate) {
-      this.config.customProxies.push({ name, url: urlTemplate, health: null, latency: null });
-      this._emit('proxy-added', { name, url: urlTemplate });
+      if (!name || !String(urlTemplate).includes('{url}')) throw new TypeError('A proxy name and a URL containing {url} are required');
+      this.config.customProxies.push({ name: String(name), url: String(urlTemplate), health: null, latency: null });
+      this._emit('proxy-added', { name: String(name) });
     }
 
     removeProxy(name) {
-      this.config.customProxies = this.config.customProxies.filter(p => p.name !== name);
+      this.config.customProxies = this.config.customProxies.filter(proxy => proxy.name !== name);
       this._emit('proxy-removed', { name });
     }
 
     setStrategyOrder(order) {
-      this.config.strategyOrder = order;
-      this._emit('config-change', { key: 'strategyOrder', value: order });
+      if (!Array.isArray(order) || order.some(name => typeof name !== 'string')) throw new TypeError('strategyOrder must be an array of strings');
+      this.config.strategyOrder = [...order];
+      this._emit('config-change', { key: 'strategyOrder', value: [...order] });
     }
 
-    /* ─── Health Checks ─── */
+    buildProxyUrl(template, target) {
+      if (!String(template).includes('{url}')) throw new TypeError('Proxy template must contain {url}');
+      return String(template).replaceAll('{url}', encodeURIComponent(target));
+    }
+
     async checkProxyHealth() {
-      const allProxies = [...this.config.fallbackProxies, ...this.config.customProxies];
       const results = [];
-
-      for (const proxy of allProxies) {
-        const start = performance.now();
+      for (const proxy of [...this.config.fallbackProxies, ...this.config.customProxies]) {
+        const started = performance.now();
         try {
-          const testUrl = proxy.url.replace('{url}', encodeURIComponent('https://httpbin.org/get'));
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 8000);
-          const response = await fetch(testUrl, { mode: 'cors', signal: controller.signal });
-          clearTimeout(timeout);
+          const response = await fetch(this.buildProxyUrl(proxy.url, 'https://example.com/'), { mode: 'cors', cache: 'no-store' });
           proxy.health = response.ok ? 'online' : 'degraded';
-          proxy.latency = Math.round(performance.now() - start);
+          proxy.latency = Math.round(performance.now() - started);
           results.push({ name: proxy.name, status: proxy.health, latency: proxy.latency });
-        } catch (e) {
-          proxy.health = 'offline';
-          proxy.latency = null;
-          results.push({ name: proxy.name, status: 'offline', error: e.message });
+        } catch (error) {
+          proxy.health = 'offline'; proxy.latency = null;
+          results.push({ name: proxy.name, status: 'offline', error: error.message });
         }
       }
-
-      // Also check SW health
-      if (this.state.swController) {
-        try {
-          const channel = new MessageChannel();
-          const swResult = await new Promise((resolve, reject) => {
-            const t = setTimeout(() => reject(new Error('SW timeout')), 5000);
-            channel.port1.onmessage = e => { clearTimeout(t); resolve(e.data); };
-            this.state.swController.postMessage({ type: 'PING' }, [channel.port2]);
-          });
-          results.push({ name: 'ServiceWorker', status: swResult?.pong ? 'online' : 'offline', latency: 0 });
-        } catch (e) {
-          results.push({ name: 'ServiceWorker', status: 'offline', error: e.message });
-        }
-      }
-
       this._emit('health-check', { results });
       return results;
     }
 
-    /* ─── Utilities ─── */
     _normalizeUrl(input) {
-      if (!input || typeof input !== 'string') return null;
-      let url = input.trim();
-      if (!url) return null;
-      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-      try { return new URL(url).href; } catch { return null; }
+      if (typeof input !== 'string') return null;
+      const value = input.trim();
+      if (!value) return null;
+      const candidate = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+      try {
+        const url = new URL(candidate);
+        return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+      } catch { return null; }
+    }
+
+    _fail(url, message) {
+      const error = new Error(message);
+      this._emit('error', { url, error: message, phase: 'navigation' });
+      return error;
     }
 
     _emit(type, detail = {}) {
       this.dispatchEvent(new CustomEvent(type, { detail }));
-      if (this.config.debug) console.log(`[FlashProxy:${type}]`, detail);
+      if (this.config.debug) console.debug(`[FlashProxy:${type}]`, detail);
     }
-
-    _log(...args) { if (this.config.debug) console.log('[FlashProxy]', ...args); }
-    _warn(...args) { console.warn('[FlashProxy]', ...args); }
-    _delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+    _log(...args) { if (this.config.debug) console.debug('[FlashProxy]', ...args); }
+    _warn(...args) { if (this.config.debug) console.warn('[FlashProxy]', ...args); }
+    _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
   }
 
-  // Expose
   global.FlashProxyLite = FlashProxyLite;
   global.FlashProxyLite.VERSION = VERSION;
-
+  global.FlashProxyLite.DEFAULTS = DEFAULTS;
 })(typeof window !== 'undefined' ? window : self);
