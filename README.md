@@ -66,10 +66,12 @@ npm start
 Open http://localhost:3000.
 
 ## API
+```javascript
 fp.go("youtube.com")      // URL
 fp.go("how to code")      // Search query
 fp.go("192.168.1.1")      // IP address
 fp.goRaw("https://...")   // Bypass detection
+```
 
 It automatically formats searches, links, everything. All of it for you automatically.
 
